@@ -77,5 +77,5 @@ def validate_comparison(metadata):
     if not all(i.get("verified") and i.get("sha256") for i in identities):
         raise ValueError("训练文件哈希不同，且无法核验其原始准备数据。请保留各训练使用的measured_matching.npz，或在模型配置填写prepared_data；无需重新训练。")
     if len({i["sha256"] for i in identities}) != 1:
-        raise ValueError("三个权重的训练数组、固定划分或数据配置实际不一致，不能公平比较")
+        raise ValueError("所选权重的训练数组、固定划分或数据配置实际不一致，不能公平比较")
     return "identical_verified_prepared_content"

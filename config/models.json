@@ -12,17 +12,17 @@
     {
       "id": "residual_mlp",
       "label": "残差 MLP",
-      "checkpoint": "D:/Projects/competition_01_physics_residual/runs/measured/best.pt"
+      "checkpoint": "runs/residual_mlp/best.pt"
     },
     {
       "id": "fourier_resmlp",
       "label": "Fourier ResMLP",
-      "checkpoint": "D:/Projects/competition_02_fourier_transformer/runs/measured/best.pt"
+      "checkpoint": "runs/fourier_resmlp/best.pt"
     },
     {
       "id": "conditional_flow",
       "label": "条件 Flow",
-      "checkpoint": "D:/Projects/competition_03_conditional_flow/runs/measured/best.pt"
+      "checkpoint": "runs/conditional_flow/best.pt"
     }
   ]
 }

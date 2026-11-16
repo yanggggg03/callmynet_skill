@@ -10,9 +10,7 @@ def main():
     request = json.load(sys.stdin)
     root = Path(__file__).resolve().parents[1]
     model_id = request["model_id"]
-    if model_id not in {"residual_mlp", "fourier_resmlp", "conditional_flow"}:
-        raise ValueError("Unknown model")
-    sys.path.insert(0, str(root / "models" / model_id))
+    sys.path.insert(0, request.get('runtime_dir') or str(root / "models" / model_id))
     import numpy as np
     import torch
     from data import to_complex

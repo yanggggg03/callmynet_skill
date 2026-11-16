@@ -1,38 +1,34 @@
 ---
 name: rf-matching-skill
-description: Compare three trained RF impedance-matching networks, display two-stub electrical-length recommendations and external power waveforms in a local panel, and export Excel. Use for this repository's residual MLP, Fourier ResMLP, and conditional Flow models.
+description: Train configurable local RF impedance-matching networks, manage best.pt checkpoints, predict reflection coefficients from Excel inputs, compare external power waveforms and export Excel in the CallMyNet workspace.
 ---
 
 # RF Matching Skill
 
-Use the Python runtime and browser panel shipped with this folder. The host model can be DeepSeek, Codex, or another tool-capable assistant; the neural networks run in PyTorch, independently of the host language model.
+Use this repository's local browser workspace or HTTP runtime. Neural networks run in the user's Python/PyTorch environment independently of the host language model. Resolve paths from this SKILL.md directory.
 
-## Start and inspect
+## Local workspace
 
-1. Resolve this skill folder from the location of `SKILL.md`. Do not assume the working directory.
-2. Read `config/models.json`. The three `checkpoint` paths must refer to the user's trained `measured-double-stub-v1` checkpoints. Each checkpoint already includes architecture configuration, inverse-network weights, response-surrogate weights, input standardization, length bounds and units. Keep these together.
-3. Start `python -B scripts/server.py` from this folder, or use `start_panel.ps1` with the user's PyTorch Python environment. Reuse an existing matching service on port 8765 when `/api/health` identifies it as `callmynet-skill`.
-4. Open `http://127.0.0.1:8765/`. Upload an input workbook, confirm the successful validation status, filename, row count and preview, then start computation. The results panel contains reflection coefficients, model comparisons and Excel downloads; the second panel contains external power waveforms and stability comparisons. The production panel has no example tab or demo entry.
+Start `python -B scripts/server.py`, or `start_panel.ps1 -Python <PyTorch Python>`, then open http://127.0.0.1:8765/. Reuse a matching service when its health identifies callmynet-skill and supports version2 training endpoints. GitHub only hosts the frontend; training and inference require a local service.
 
-The distributed configuration initially points to the three original `D:/Projects/.../runs/measured/best.pt` paths. Edit a local config or pass `--config <path>` on other machines. Do not substitute `runs/smoke`, `runs/measured_smoke`, old nine-input checkpoints, or generated samples for trained weights. Missing weights mean the runtime is not yet ready for real inference; the panel shows service and weight readiness before enabling computation.
+Let the user choose model count, types and names. Built-ins are residual MLP, Fourier ResMLP and conditional Flow; the same type can appear multiple times. Do not force all three. Local developers can register compatible networks; read [references/training.md](references/training.md) for extension and training API details.
 
-## Inference and comparison
+## Training
 
-- Accept one or more rows containing linear `mag` and phase `deg`, or explicitly selected S11 dB magnitude. Input Excel/CSV needs only those columns; case-insensitive aliases `mag0,deg0` and `mag0,meg0` are accepted. L1/L2 are outputs, not required prediction inputs. A failed upload clears the previous input; changing the file, magnitude unit or input mode invalidates previous results.
-- Run all three networks on the same inputs. Preserve each recommendation separately; do not average multimodal electrical lengths.
-- All candidate sets, including Flow samples, are rescored by the single configured `evaluation_model` response surrogate. Separate self-evaluation scores are not comparable. Keep the training-data fingerprint, electrical-length units and bounds consistent across models.
-- Without power waveforms, report an **estimated matching recommendation, awaiting waveform verification**. Estimated reflected-power ratio is |Gamma|²; it is not a time waveform or a measured stability result.
-- Power comparison requires independently acquired measured or simulated traces for the three schemes under the same initial conditions, target power, time grid and observation length. Read [references/interface.md](references/interface.md) for the exact import contract.
-- Bind traces to the current `run_id`, `sample_id`, and `scenario_id`. One waveform import compares one sample and one scenario. Do not attach stale traces or synthetic examples to a real inference run.
-- Thresholds evaluate the last 40% of the common observation window by default: CV ≤2%, peak-to-peak ripple/target ≤5%, mean target error ≤2%, linear drift/target ≤1%; full-trace overshoot ≤20%. These defaults are configurable engineering criteria, not device specifications. At least 20 steady-window samples and 0.1 seconds total duration are required by default.
-- A stable candidate must satisfy every limit. Rank passing candidates by the mean of metric/limit ratios. If none pass, report **no stable scheme**; the lowest score is diagnostic only. If scores tie, do not claim a meaningful measured advantage. Finite sampled traces do not prove mathematical or global stability.
-- Pulsed RF traces may include startup and shutdown. Set an explicit common `evaluation_start_s`/`evaluation_end_s` for the energized interval; the full trace remains available in the plot and Excel. Optional `incident_power_w`/`reflected_power_w` must satisfy `power_w = incident_power_w - reflected_power_w`. Channel switching changes the displayed trace; stability scores remain based on `power_w`.
-- The distributed 20 kW pulse example follows the qualitative shape in figures 3.41/3.42 of the cited ICRF thesis. All actions and per-model responses are presets, not digitized measurements or network inference. Its winner has no evidential meaning for the three networks.
+The panel accepts a measured Excel/CSV with initial magnitude/phase, L1/L2 and matched magnitude/phase. Two-column prediction inputs are insufficient for training. Select initial and matched magnitude units independently, retain phases/electrical lengths in degrees, and support experimental group_id.
 
-## Deliver results
+Prepare data once with fixed group splits, then train selected models against that same prepared archive. Show asynchronous status, logs and checkpoint paths. Each model gets a separate best.pt, history and summary in a new runs/training job directory. Do not merge weights or overwrite previous jobs. Activate only a complete successful job; cancellation/failure leave existing active models intact.
 
-Lead the matching-effect result with the **reflection coefficient**, including linear magnitude `estimated_matched_mag=|Gamma|` (dimensionless, not a percentage) and phase `estimated_matched_deg` in degrees. Retain complex components `estimated_matched_real/imag` in API and Excel. The reflected-power ratio is auxiliary and equals the magnitude squared. Do not relabel an estimated coefficient as measured merely because a supplied power trace passes the stability test.
+The UI writes a machine-local active configuration beside config/models.json. Keep data, runs, weights and *.local.json out of public releases and ZIPs. Data generated from a common trajectory is not independent measured validation.
 
-Use the panel's Excel download or `POST /api/export` to save all three results, estimated recommendations, waveform metrics, waveform samples, verified selected actions and provenance. Keep the `estimated` and measured/simulation/demo distinctions in the exported results and explanation.
+## Prediction and waveform verification
 
-No hardware actuation is implemented. The runtime recommends electrical lengths and evaluates supplied traces. For GitHub distribution and local service setup, read the root README and [references/interface.md](references/interface.md). A repository URL distributes the skill; it does not execute PyTorch by itself.
+Select one or more trained models plus one common response evaluator from that selection. Rescore all candidates with that evaluator; self-scores are not comparable. Require consistent training arrays/splits, length units and bounds.
+
+Upload mag0/deg0 Excel/CSV (mag0/meg0 and mag/deg aliases accepted), confirm successful validation, filename, row count and preview, then compute. A failed upload must not reuse old data; changing inputs, model selection or evaluator invalidates prior results.
+
+Lead results with linear reflection coefficient magnitude |Gamma| and phase in degrees. API/Excel retain real/imaginary components; reflected power ratio is auxiliary magnitude squared. Estimated coefficients come from a response surrogate, not new measurements.
+
+These networks predict static samples, not dynamic power waveforms. Import independently measured or simulated traces for every selected model under the same initial condition, target, time grid and observation window. Bind them to current run_id/sample_id/scenario_id. Read [references/interface.md](references/interface.md) for format and thresholds. Do not synthesize waveforms and label them model responses. Without traces report estimated recommendations awaiting verification; if none pass every threshold report no stable scheme.
+
+Export predictions, recommendations, provided waveforms and stability metrics. No hardware actuation is implemented. See README.md for setup and [references/validation.md](references/validation.md) for verification limits.

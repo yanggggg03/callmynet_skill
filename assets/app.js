@@ -1,9 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const IDS = ['residual_mlp', 'fourier_resmlp', 'conditional_flow'];
+let IDS = ['residual_mlp', 'fourier_resmlp', 'conditional_flow'];
 const LABELS = {residual_mlp:'残差 MLP', fourier_resmlp:'Fourier ResMLP', conditional_flow:'条件 Flow'};
 const COLORS = {residual_mlp:'#4a84dd', fourier_resmlp:'#d99a39', conditional_flow:'#129679'};
-const S = {bundle:null, batch:null, filename:'', inputMode:'file', connected:false, readyModels:0, job:'idle', analysis:null, visible:new Set(IDS), api:localStorage.getItem('callmynet-api') || '', busy:false};
+const S = {bundle:null, batch:null, filename:'', inputMode:'file', models:[], selected:new Set(), trainingActive:false, connected:false, readyModels:0, job:'idle', analysis:null, visible:new Set(IDS), api:localStorage.getItem('callmynet-api') || '', busy:false};
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = (value, digits=2) => value === null || value === undefined ? '—' : Number(value).toFixed(digits);
 const configurationKeys = ['max_cv_pct','max_ripple_pct','max_error_pct','max_drift_pct','max_overshoot_pct','steady_start_fraction'];
@@ -29,8 +29,9 @@ async function health() {
   try {
     const health = await api('/api/health');
     const count = health.models.filter(m=>m.checkpoint_ready).length;
-    S.connected=true;S.readyModels=count;
-    $('connection').textContent = `本地服务已连接 · 权重 ${count}/3`;
+    S.connected=true;S.readyModels=count;S.models=health.models;
+    if(typeof refreshModelSelection==='function')refreshModelSelection(health);
+    $('connection').textContent = `本地服务已连接 · 权重 ${count}/${health.models.length}`;
     $('connection').className = 'connection ready';
     $('model-chips').innerHTML = health.models.map(m=>`<span class="${m.checkpoint_ready?'ready':''}">${escapeHTML(m.label)} ${m.checkpoint_ready?'✓':'待训练'}</span>`).join('');
     syncControls();return true;
@@ -56,17 +57,22 @@ function options() {
   for(const key of ['evaluation_start_s','evaluation_end_s'])if($(key).value.trim()!=='')result[key]=Number($(key).value);
   return result;
 }
+function selectedModels(){return S.models.filter(m=>S.selected.has(m.id));}
 function syncControls(){
   const count=S.inputMode==='file'?(S.batch?.length||0):1;
-  $('run').disabled=S.busy||!count||!S.connected||S.readyModels!==3;
+  $('run').disabled=S.busy||!count||!S.connected||!selectedModels().length||selectedModels().some(m=>!m.checkpoint_ready)||S.trainingActive;
   $('run-label').textContent=S.job==='running'?'正在计算…':`开始计算${count?' · '+count+' 条':''}`;
   for(const id of ['input-file','wave-file','unit','mode-file','mode-manual','clear-batch','mag','deg','connect'])$(id).disabled=S.busy;
+  $('evaluation-model').disabled=S.busy;
+  document.querySelectorAll('#inference-models input').forEach(input=>input.disabled=S.busy);
   $('upload-zone').classList.toggle('disabled',S.busy);
   let hint='文件校验通过后，即可开始计算。';
-  if(S.job==='running')hint=`正在处理 ${count} 条工况，等待三个模型返回结果，请保持页面打开。`;
+  if(S.job==='running')hint=`正在处理 ${count} 条工况，等待所选模型返回结果，请保持页面打开。`;
   else if(!S.connected)hint='请先启动本地推理服务，在右上角“连接设置”中连接。';
-  else if(S.readyModels!==3)hint=`已识别权重 ${S.readyModels}/3，请配置全部模型权重后计算。`;
-  else if(count)hint=`${S.inputMode==='file'?'文件已就绪':'单条输入已就绪'}，点击“开始计算”运行三个模型。`;
+  else if(S.trainingActive)hint='正在训练，请等待结束或取消训练后计算。';
+  else if(!selectedModels().length)hint='请先勾选参与预测的模型。';
+  else if(selectedModels().some(m=>!m.checkpoint_ready))hint='所选模型尚无权重，请先训练并启用。';
+  else if(count)hint=`${S.inputMode==='file'?'文件已就绪':'单条输入已就绪'}，点击“开始计算”运行 ${selectedModels().length} 个模型。`;
   $('run-hint').textContent=hint;
   $('job-state').textContent=({idle:S.inputMode==='file'?'等待上传':'单条输入',ready:'待处理',running:'正在处理',done:'处理完成',error:'处理失败'})[S.job];
   for(const id of ['flow-input','flow-results','flow-wave'])$(id).className='';
@@ -130,6 +136,7 @@ function setInputMode(mode){
 }
 function useBundle(bundle) {
   S.bundle=bundle;S.analysis=bundle.waveform_analysis || null;
+  updatePlotModels(bundle.models || [...new Set(bundle.predictions.map(r=>r.model_id))].map(id=>({id,label:bundle.predictions.find(r=>r.model_id===id)?.model_label||LABELS[id]||id})));
   if(bundle.mode==='demo'){
     $('unit').value=bundle.magnitude_unit;
     if(!S.batch){$('mag').value=bundle.records[0].mag;$('deg').value=bundle.records[0].deg;}
@@ -161,7 +168,7 @@ function renderResults() {
     title=prefix+LABELS[winner];caption='波形比较中满足稳定性判据的最佳方案';
     detail=`L1 ${num(result.L1)} ${result.length_unit} · L2 ${num(result.L2)} ${result.length_unit} · ${S.analysis.source==='measured'?'实测':S.analysis.source==='simulation'?'仿真':'预设示意'}功率波形`;
   } else if(verified) {
-    title='三套方案均未满足稳定性判据';caption=prefix+'当前工况的波形比较';detail='请检查波形、调节方案与设备要求，不将最低分方案标记为稳定方案。';
+    title='所选方案均未满足稳定性判据';caption=prefix+'当前工况的波形比较';detail='请检查波形、调节方案与设备要求，不将最低分方案标记为稳定方案。';
   } else {
     title=prefix+LABELS[provisional.model_id];caption='预计匹配推荐 · 等待功率波形验证';detail=`L1 ${num(provisional.L1)} ${provisional.length_unit} · L2 ${num(provisional.L2)} ${provisional.length_unit} · 共用响应代理评分`;
     coefficient=provisional;
@@ -170,7 +177,7 @@ function renderResults() {
   $('recommendation').innerHTML=`<span class="caption">${escapeHTML(caption)}</span><strong>${escapeHTML(title)}</strong>${coefficientMarkup}<p>${escapeHTML(detail)}</p>`;
   document.querySelectorAll('.length-unit').forEach(el=>el.textContent=records[0].length_unit==='deg'?'°':records[0].length_unit);
   $('result-rows').innerHTML=records.map(r=>`<tr class="${r.model_id===(winner || provisional.model_id)?'best':''}"><td>${escapeHTML(LABELS[r.model_id])}${r.outside_training_input_box?'<small>超出训练输入范围</small>':''}</td><td>${num(r.L1)}</td><td>${num(r.L2)}</td><td>${num(r.estimated_matched_mag,5)}</td><td>${num(r.estimated_matched_deg)}</td></tr>`).join('');
-  $('result-note').textContent=S.bundle.mode==='demo'?'示例反射系数与动作均为预设值，不能用来判断三个网络的真实优劣。':'返回匹配后反射系数幅值|Γ|及相位，幅值是0～1的线性值，不是反射功率百分比。数值为统一响应代理预测，并非新调节后的实测；低幅值时相位对噪声敏感。';
+  $('result-note').textContent=S.bundle.mode==='demo'?'示例反射系数与动作均为预设值，不能用来判断所选网络的真实优劣。':'返回匹配后反射系数幅值|Γ|及相位，幅值是0～1的线性值，不是反射功率百分比。数值为统一响应代理预测，并非新调节后的实测；低幅值时相位对噪声敏感。';
 }
 function renderAnalysis() {
   const analysis=S.analysis;
@@ -190,6 +197,13 @@ function renderAnalysis() {
   $('metrics').innerHTML=`<div><span>首选方案 CV</span><strong>${num(best.cv_pct)}<small>%</small></strong></div><div><span>峰峰纹波 / 目标</span><strong>${num(best.ripple_pct)}<small>%</small></strong></div><div><span>稳态偏差</span><strong>${num(best.error_pct)}<small>%</small></strong></div><div><span>${analysis.winner?escapeHTML(LABELS[analysis.winner]):'全部方案'}</span><strong class="${analysis.winner?'positive':'negative'}">${analysis.winner?'满足判据':'未达标'}</strong></div>`;
   $('metric-table').innerHTML='<table><thead><tr><th>模型</th><th>CV %</th><th>纹波 %</th><th>偏差 %</th><th>漂移 %</th><th>超调 %</th><th>评分↓</th><th>判定</th></tr></thead><tbody>'+analysis.metrics.map(m=>`<tr><td>${escapeHTML(LABELS[m.model_id])}</td><td>${num(m.cv_pct)}</td><td>${num(m.ripple_pct)}</td><td>${num(m.error_pct)}</td><td>${num(m.drift_pct)}</td><td>${num(m.overshoot_pct)}</td><td>${num(m.score,3)}</td><td>${m.stable?'达标':'未达标'}</td></tr>`).join('')+'</tbody></table>';
   renderChart();
+}
+function updatePlotModels(models){
+  IDS=models.map(m=>m.id);S.visible=new Set(IDS);
+  const palette=['#4a84dd','#d99a39','#129679','#9869cb','#cf617a','#327d9b'];
+  models.forEach((m,i)=>{LABELS[m.id]=m.label||m.id;COLORS[m.id]=palette[i%palette.length];});
+  $('legend').innerHTML=models.map(m=>`<button data-model="${escapeHTML(m.id)}"><i class="dot" style="background:${COLORS[m.id]}"></i>${escapeHTML(m.label||m.id)}</button>`).join('')+'<span><i class="target-dash"></i>目标</span>';
+  document.querySelectorAll('#legend button').forEach(button=>button.onclick=()=>{const id=button.dataset.model;if(S.visible.has(id)){if(S.visible.size===1)return;S.visible.delete(id);}else S.visible.add(id);button.classList.toggle('off',!S.visible.has(id));renderChart();});
 }
 function renderChart() {
   const analysis=S.analysis;if(!analysis)return;
@@ -241,7 +255,7 @@ function renderChart() {
       const values=all.filter(r=>r.model_id===id);
       let l=0,h=values.length-1;while(l<h){const mid=(l+h)>>1;if(values[mid].time_s<time)l=mid+1;else h=mid;}
       const row=l>0 && Math.abs(values[l-1].time_s-time)<Math.abs(values[l].time_s-time)?values[l-1]:values[l];
-      html+=`<br><span style="color:${COLORS[id]}">●</span> ${LABELS[id]} ${num(field(row))} W`;
+      html+=`<br><span style="color:${COLORS[id]}">●</span> ${escapeHTML(LABELS[id])} ${num(field(row))} W`;
     }
     $('chart-tooltip').innerHTML=html;$('chart-tooltip').classList.remove('hidden');
   };
@@ -277,21 +291,21 @@ function exportLocally(){
   const wave=['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source','incident_power_w','reflected_power_w','reflected_power_ratio'];
   const sheet=(name,keys,rows)=>({name,headers:keys,rows:rows.map(r=>keys.map(k=>r[k]??''))});
   const confirmed=b.predictions.filter(r=>r.model_id===a.winner&&String(r.sample_id)===String(a.sample_id)&&b.run_id===a.run_id);
-  return localWorkbook([sheet('三模型结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['主要返回量','estimated_matched_mag=线性反射系数幅值|Γ|，无量纲非百分比；estimated_matched_deg=相位°；real/imag=实部/虚部；reflected_power_ratio=辅助功率比|Γ|²'],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['波形参考',JSON.stringify(b.waveform_reference||{})],['说明',b.notice]]}]);
+  return localWorkbook([sheet('模型预测结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['主要返回量','estimated_matched_mag=线性反射系数幅值|Γ|，无量纲非百分比；estimated_matched_deg=相位°；real/imag=实部/虚部；reflected_power_ratio=辅助功率比|Γ|²'],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['波形参考',JSON.stringify(b.waveform_reference||{})],['说明',b.notice]]}]);
 }
-async function busy(action){if(S.busy)return;S.busy=true;syncControls();try{await action();}catch(error){notice(error.message,'error');}finally{S.busy=false;syncControls();}}
+async function busy(action){if(S.busy)return;S.busy=true;syncControls();if(typeof syncTrainingControls==='function')syncTrainingControls();try{await action();}catch(error){notice(error.message,'error');}finally{S.busy=false;syncControls();if(typeof syncTrainingControls==='function')syncTrainingControls();}}
 $('settings-toggle').onclick=()=>$('settings').classList.toggle('hidden');$('api-url').value=S.api;
-$('connect').onclick=()=>busy(async()=>{S.api=$('api-url').value.trim().replace(/\/$/,'');if(S.api&&!/^https?:\/\//.test(S.api))throw Error('服务地址须以http://或https://开头');localStorage.setItem('callmynet-api',S.api);if(await health())notice('已连接推理服务。');else throw Error('连接失败，请检查服务地址。');});
+$('connect').onclick=()=>busy(async()=>{const address=$('api-url').value.trim().replace(/\/$/,'');if(address&&!/^https?:\/\//.test(address))throw Error('服务地址须以http://或https://开头');S.api=address;localStorage.setItem('callmynet-api',S.api);resetFile();S.selected.clear();T.selectedInitialized=false;if(await health()){notice('已连接本地服务。');pollTraining();}else throw Error('连接失败，请检查服务地址。');});
 $('run').onclick=()=>busy(async()=>{
   if(S.inputMode==='file'&&!S.batch)throw Error('请先上传并校验工况数据文件。');
-  if(!S.connected||S.readyModels!==3)throw Error('请先连接推理服务并配置全部三个模型权重。');
+  if(!S.connected||!selectedModels().length||selectedModels().some(m=>!m.checkpoint_ready)||S.trainingActive)throw Error('请先连接本地服务，勾选已训练的模型，等待训练任务结束。');
   const records=S.inputMode==='file'?S.batch:[{mag:Number($('mag').value),deg:Number($('deg').value)}];
   if(S.inputMode==='manual'&&(!$('mag').value.trim()||!$('deg').value.trim()))throw Error('请填写幅值与相位。');
   clearResults();S.job='running';syncControls();
-  $('result-mode').textContent='计算中';$('result-empty-title').textContent='正在比较三个模型';
+  $('result-mode').textContent='计算中';$('result-empty-title').textContent='正在比较所选模型';
   $('result-empty-detail').textContent=`正在处理 ${records.length} 条工况，结果将在全部计算完成后显示。`;
-  notice(`正在处理 ${records.length} 条工况，载入三个网络并比较候选方案…`);
-  try{useBundle(await api('/api/predict',{records,magnitude_unit:$('unit').value}));notice(`处理完成：${records.length} 条工况的三模型结果已生成，可下载 Excel。`,'success');}
+  notice(`正在处理 ${records.length} 条工况，运行所选网络并比较候选方案…`);
+  try{useBundle(await api('/api/predict',{records,magnitude_unit:$('unit').value,model_ids:selectedModels().map(m=>m.id),evaluation_model:$('evaluation-model').value}));notice(`处理完成：${records.length} 条工况的模型结果已生成，可下载 Excel。`,'success');}
   catch(error){S.job='error';$('result-mode').textContent='计算失败';$('result-mode').className='badge error';$('result-empty-title').textContent='本次计算未完成';$('result-empty-detail').textContent=error.message;throw error;}
 });
 $('input-file').onchange=event=>acceptInputFile(event.target.files[0]);
@@ -311,22 +325,21 @@ $('sample-select').onchange=renderResults;
 $('wave-file').onchange=event=>busy(async()=>{const file=event.target.files[0];if(!file)return;
   $('wave-upload-status').textContent=`正在上传并校验：${file.name}`;$('wave-upload-status').className='wave-upload-status reading';
   try{const payload=await upload(file);const expected=S.bundle?.run_id;
-  const analysis=await api('/api/analyze-waveforms',{...payload,source:$('wave-source-select').value,options:options(),expected_run_id:expected});
+  const analysis=await api('/api/analyze-waveforms',{...payload,source:$('wave-source-select').value,options:options(),expected_run_id:expected,model_ids:S.bundle?.models?.map(m=>m.id),model_labels:Object.fromEntries((S.bundle?.models||[]).map(m=>[m.id,m.label]))});
   if(S.bundle&&!S.bundle.records.some(r=>String(r.sample_id)===String(analysis.sample_id)))throw Error('波形sample_id不在当前推理批次内');
   if(S.bundle&&S.bundle.mode==='inference'&&analysis.source==='demo')throw Error('合成示例波形不能验证真实推理结果');
   S.analysis=analysis;if(S.bundle)S.bundle.waveform_analysis=analysis;else{S.bundle={mode:'waveforms_only',run_id:analysis.run_id,records:[],predictions:[],estimated_recommendations:[],notice:'独立导入的功率波形评估'};$('export').disabled=false;}
-  renderAnalysis();if(S.bundle.predictions.length)renderResults();notice(analysis.winner?'功率波形比较完成，已选出满足当前稳定性判据的方案。':'功率波形比较完成：三套方案均未满足当前稳定性判据。',analysis.source==='demo'?'demo':'');
-  $('wave-upload-status').textContent=`导入成功：${file.name} · ${analysis.waveforms.length} 个采样点 · 三模型波形已完成稳定性比较`;$('wave-upload-status').className='wave-upload-status success';
+  updatePlotModels(analysis.metrics.map(m=>({id:m.model_id,label:m.model_label})));renderAnalysis();if(S.bundle.predictions.length)renderResults();notice(analysis.winner?'功率波形比较完成，已选出满足当前稳定性判据的方案。':'功率波形比较完成：所选方案均未满足当前稳定性判据。',analysis.source==='demo'?'demo':'');
+  $('wave-upload-status').textContent=`导入成功：${file.name} · ${analysis.waveforms.length} 个采样点 · 所选模型波形已完成稳定性比较`;$('wave-upload-status').className='wave-upload-status success';
   }catch(error){$('wave-upload-status').textContent=`导入失败：${file.name} · ${error.message}${S.analysis?'。图中仍为上一次成功导入的波形。':''}`;$('wave-upload-status').className='wave-upload-status error';throw error;}
   finally{event.target.value='';}
 });
-$('reanalyze').onclick=()=>busy(async()=>{if(!S.analysis)return;const response=await api('/api/analyze-waveforms',{rows:S.analysis.waveforms,source:S.analysis.source,expected_run_id:S.bundle?.run_id,options:options()});S.analysis=response;S.bundle.waveform_analysis=response;renderAnalysis();if(S.bundle.predictions.length)renderResults();notice('已按更新后的判据重新比较。',response.source==='demo'?'demo':'');});
+$('reanalyze').onclick=()=>busy(async()=>{if(!S.analysis)return;const response=await api('/api/analyze-waveforms',{rows:S.analysis.waveforms,source:S.analysis.source,expected_run_id:S.bundle?.run_id,options:options(),model_ids:S.analysis.metrics.map(m=>m.model_id),model_labels:Object.fromEntries(S.analysis.metrics.map(m=>[m.model_id,m.model_label]))});S.analysis=response;S.bundle.waveform_analysis=response;renderAnalysis();if(S.bundle.predictions.length)renderResults();notice('已按更新后的判据重新比较。',response.source==='demo'?'demo':'');});
 $('export').onclick=()=>busy(async()=>{if(!S.bundle)return;download(exportLocally(),(S.bundle.mode==='demo'?'DEMO_':'')+'matching_results.xlsx');});
 $('input-template').onclick=()=>download(localWorkbook([{name:'input',headers:['mag0','deg0'],rows:[]}]),'prediction_template.xlsx');
 $('wave-template').onclick=()=>download(localWorkbook([{name:'waveforms',headers:['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source','incident_power_w','reflected_power_w'],rows:[]}]),'waveform_template.xlsx');
-document.querySelectorAll('#legend button').forEach(button=>button.onclick=()=>{const id=button.dataset.model;if(S.visible.has(id)){if(S.visible.size===1)return;S.visible.delete(id);}else S.visible.add(id);button.classList.toggle('off',!S.visible.has(id));renderChart();});
+
 $('zoom').oninput=$('pan').oninput=renderChart;
 $('power-channel').onchange=renderChart;
 $('reset-zoom').onclick=()=>{$('zoom').value=1;$('pan').value=0;renderChart();};
 syncControls();
-health().then(connected=>{if(S.busy||S.batch||S.bundle)return;notice(connected?(S.readyModels===3?'推理服务已连接，三个模型权重就绪。请上传待处理数据。':`服务已连接，当前可用权重 ${S.readyModels}/3。请配置完整权重后计算。`):'未连接推理服务。请启动本地服务，或在“连接设置”中填写服务地址。',connected?'':'error');});

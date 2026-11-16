@@ -1,4 +1,4 @@
 interface:
-  display_name: "CallMyNet 三模型调节"
-  short_description: "比较三套训练网络的支节调节方案，通过功率波形评估稳定性并导出Excel"
-  default_prompt: "使用 $rf-matching-skill 打开调节面板，调用三个训练模型比较方案并导出Excel。"
+  display_name: "CallMyNet 模型训练与调节"
+  short_description: "选择模型并训练本地权重，上传Excel预测反射系数、比较外部功率波形并导出结果"
+  default_prompt: "使用 $rf-matching-skill 打开本地训练与调节工作台，选择需要的模型训练或使用已有权重，预测反射系数并导出Excel。"

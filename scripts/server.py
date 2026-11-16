@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from core import ROOT, MODEL_IDS, analyze_waveforms, export_bundle, file_rows, load_config, run_models, status, validate_records
 from demo import make_demo
 from excel_writer import write_workbook
+from training_service import TrainingService
 import io
 
 MODEL_LOCK = threading.Lock()
@@ -54,6 +55,8 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             if path == "/api/health":
                 self.send(200, status(load_config(self.server.config_path)))
+            elif path == '/api/training/status':
+                self.send(200, self.server.training.snapshot())
             elif path == "/api/demo":
                 self.send(200, make_demo())
             elif path.startswith("/api/templates/"):
@@ -88,7 +91,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(413, {"error": "请求大小须在24MB以内"})
             data = json.loads(self.rfile.read(size).decode("utf-8"))
             path = urlparse(self.path).path
-            if path == "/api/predict":
+            if path == '/api/training/start':
+                self.send(202, self.server.training.start(data))
+            elif path == '/api/training/cancel':
+                self.send(200, self.server.training.cancel())
+            elif path == '/api/training/activate':
+                self.send(200, self.server.training.activate(data.get('job_id')))
+            elif path == "/api/predict":
                 if not MODEL_LOCK.acquire(blocking=False):
                     return self.send(409, {"error": "模型正在处理另一项请求，请稍后重试"})
                 try:
@@ -119,6 +128,7 @@ def main():
     config = load_config(args.config)
     service = ThreadingHTTPServer((args.host, args.port), Handler)
     service.config_path = args.config
+    service.training = TrainingService(args.config, MODEL_LOCK, config.get('training_root'))
     print(f"Panel: http://{args.host}:{args.port}", flush=True)
     print(json.dumps(status(config), ensure_ascii=False), flush=True)
     try:
@@ -126,6 +136,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        service.training.shutdown()
         service.server_close()
 
 

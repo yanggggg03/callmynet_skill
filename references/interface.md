@@ -1,5 +1,7 @@
 # 模型、功率波形和 HTTP 接口
 
+2.0支持可选模型和本地训练；新增接口及扩展协议见 [training.md](training.md)。下文早期三模型默认配置适用于已有权重迁移。
+
 ## 本地运行
 
 安装 Python 3.10+、numpy 和 PyTorch。已有训练环境可直接复用，不需要 DeepSeek/OpenAI API key。面板的 HTML、CSS、JavaScript 不依赖 npm、CDN 或联网字体。
@@ -14,7 +16,7 @@
 
 ## 权重配置
 
-`config/models.json` 的三个条目对应三个源项目。默认正式权重路径为：
+`config/models.json` 的三个条目对应三个源项目。默认使用Skill根目录下runs中的相对权重路径，面板训练后由本地active配置接管。原作者已有权重的源项目路径为：
 
 | id | 源项目 | 权重 |
 | --- | --- | --- |
@@ -26,7 +28,7 @@
 
 `evaluation_model` 指定唯一共用响应代理，默认 `residual_mlp`。这只是可用的统一评分入口，应通过独立验证集评估响应代理的准确性后再选定。推理中的 `estimated_recommendations` 为共用代理候选评分结果，最终动态验证来自外部波形。
 
-`python_executable` 留空则复用启动服务的 Python；`flow_candidates` 默认32，固定随机种子保证相同输入、配置、权重时可重复。三个生成进程和一个评分进程隔离运行，避免原项目同名 Python 模块互相污染。
+`python_executable` 留空则复用启动服务的 Python；`flow_candidates` 默认32，固定随机种子保证相同输入、配置、权重时可重复。各模型生成进程和共用评分进程隔离运行，避免同名Python模块互相污染。
 
 训练一致性校验首先比较检查点记录的NPZ文件哈希。若三者不同（例如分别准备时元数据保存了不同项目路径），服务会定位各检查点训练时的准备文件，先核对它与检查点原始文件哈希一致，再对训练数组、标签、分组、行号、训练/验证/测试索引、单位和配置计算规范化内容指纹。描述性路径不参与内容指纹；真实数据或划分差异仍然拒绝比较。
 
@@ -48,7 +50,7 @@ mag,deg
 
 ## 功率波形
 
-单次上传包含同一调节批次、样本与工况的三个模型波形，可用 `.xlsx` 或 `.csv`：
+单次上传包含同一调节批次、样本与工况的所选全部模型波形，可用 `.xlsx` 或 `.csv`：
 
 ```csv
 run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
@@ -59,7 +61,7 @@ run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
 | --- | --- |
 | run_id | 当前推理响应返回的编号；独立波形比较可以自定，但不能用于验证不匹配的模型推理 |
 | sample_id | 本次输入样本序号，例如1 |
-| scenario_id | 实验/仿真工况编号，三个方案一致 |
+| scenario_id | 实验/仿真工况编号，所选方案一致 |
 | model_id | residual_mlp / fourier_resmlp / conditional_flow |
 | time_s | 单位秒，非负；每个模型的时间戳唯一 |
 | power_w | 同一位置测量、同一意义的功率，单位W，非负 |
@@ -84,7 +86,11 @@ run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
 | --- | --- |
 | GET /api/health | 模型权重是否存在、服务版本、统一评估器 |
 | GET /api/demo | 明确标记demo的合成演示 |
-| POST /api/predict | 三网络生成候选并统一评分 |
+| POST /api/predict | 所选网络生成候选并统一评分 |
+| POST /api/training/start | 启动本地训练任务 |
+| GET /api/training/status | 任务状态、日志、轮次、权重位置 |
+| POST /api/training/cancel | 取消训练，不替换既有权重 |
+| POST /api/training/activate | 启用完整成功任务的权重 |
 | POST /api/read-input | 读取预测Excel/CSV |
 | POST /api/analyze-waveforms | 波形检查、指标计算与选优 |
 | POST /api/export | 将结果包导出为XLSX二进制 |
@@ -97,7 +103,7 @@ run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
 {"magnitude_unit":"linear","records":[{"mag":0.4,"deg":60}]}
 ```
 
-返回含 `run_id,records,predictions,estimated_recommendations,metadata`。`predictions` 保留全部三模型，每条含 `sample_id,model_id,L1,L2,length_unit,estimated_matched_mag,estimated_reflected_power_ratio,evaluator` 等。
+返回含 `run_id,records,models,predictions,estimated_recommendations,metadata`。`predictions` 保留全部所选模型，每条含 `sample_id,model_id,L1,L2,length_unit,estimated_matched_mag,estimated_reflected_power_ratio,evaluator` 等。
 
 主要返回量是匹配后反射系数：`estimated_matched_mag`是线性幅值，`estimated_matched_deg`是相位°，`estimated_matched_real/imag`是复反射系数实部与虚部。幅值不带百分号，满足 `|Γ|=sqrt(real²+imag²)`。辅助功率比为 `estimated_reflected_power_ratio=|Γ|²`。面板显示幅值和相位，Excel/API保留全部分量。功率波形只能验证功率稳定性；若没有新的幅相测量，展示的反射系数仍为代理估计。
 
@@ -112,7 +118,7 @@ run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
 }
 ```
 
-上面仅展示一条字段格式，实际需提交全部三个模型且包含足够样本。也可用 `filename,content_base64` 替代 `rows` 上传表格。返回 `metrics,waveforms,winner,selection_status,settings`。将它作为原推理包的 `waveform_analysis` 字段，再POST给 `/api/export`。
+上面仅展示一条字段格式，实际需提交本次所选全部模型且包含足够时间采样点。通过model_ids指定预期模型列表。也可用 `filename,content_base64` 替代 `rows` 上传表格。返回 `metrics,waveforms,winner,selection_status,settings`。将它作为原推理包的 `waveform_analysis` 字段，再POST给 `/api/export`。
 
 ## GitHub与本地服务
 

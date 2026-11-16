@@ -14,6 +14,7 @@ from pathlib import Path
 
 from excel_writer import write_workbook
 from training_identity import validate_comparison
+from model_registry import registry, resolve_model, valid_id
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_IDS = ("residual_mlp", "fourier_resmlp", "conditional_flow")
@@ -36,12 +37,18 @@ def finite(value, name):
 def load_config(path=None):
     path = Path(path or ROOT / "config/models.json").resolve()
     config = json.loads(path.read_text(encoding="utf-8-sig"))
-    if [m["id"] for m in config["models"]] != list(MODEL_IDS):
-        raise ValueError("配置必须按顺序包含全部三个模型")
-    if config["evaluation_model"] not in MODEL_IDS:
+    active = path.with_name(path.stem + '.active.local.json')
+    if active.is_file():
+        selected = json.loads(active.read_text(encoding='utf-8'))
+        config.update({key: selected[key] for key in ('models', 'evaluation_model')})
+    ids = [m['id'] for m in config['models']]
+    if not ids or len(ids) != len(set(ids)) or not all(valid_id(key) for key in ids):
+        raise ValueError('模型列表须非空，模型标识须唯一且由小写字母、数字、下划线组成')
+    if config["evaluation_model"] not in ids:
         raise ValueError("未知的共用响应评估器")
     config["python_executable"] = config.get("python_executable") or sys.executable
     for model in config["models"]:
+        resolve_model(model, config)
         checkpoint = Path(model["checkpoint"]).expanduser()
         model["checkpoint"] = str((ROOT / checkpoint).resolve() if not checkpoint.is_absolute() else checkpoint.resolve())
         if model.get("prepared_data"):
@@ -52,8 +59,10 @@ def load_config(path=None):
 
 def status(config):
     return {
-        "service": "callmynet-skill", "version": "1.1.0",
-        "models": [{"id": m["id"], "label": m.get("label", LABELS[m["id"]]),
+        "service": "callmynet-skill", "version": "2.0.0",
+        "model_types": [{k: v[k] for k in ('id', 'label')} for v in registry(config).values()],
+        "models": [{"id": m["id"], "type": m.get('type', m['id']), "label": m.get("label", LABELS.get(m["id"], m['id'])),
+                    "checkpoint": m['checkpoint'],
                     "checkpoint_ready": Path(m["checkpoint"]).is_file()} for m in config["models"]],
         "evaluator": config["evaluation_model"],
         "capability": "static_matching_with_optional_external_power_waveforms",
@@ -124,6 +133,7 @@ def file_rows(payload):
 def worker(config, model, request):
     command = [config["python_executable"], "-B", str(ROOT / "scripts/model_worker.py")]
     body = {"model_id": model["id"], "checkpoint": model["checkpoint"],
+            "runtime_dir": resolve_model(model, config)['runtime_dir'],
             "seed": config.get("seed", 42), "threads": config.get("threads", 2),
             "device": config.get("device", "cpu"), "candidates": config.get("flow_candidates", 32), **request}
     if model.get("prepared_data"):
@@ -132,36 +142,46 @@ def worker(config, model, request):
     result = subprocess.run(command, input=json.dumps(body), text=True, encoding="utf-8",
                             capture_output=True, timeout=config.get("timeout_seconds", 180), **flags)
     if result.returncode:
-        raise ValueError(f"{LABELS[model['id']]} 推理失败：{result.stderr.strip()[-1800:]}")
+        raise ValueError(f"{model.get('label', model['id'])} 推理失败：{result.stderr.strip()[-1800:]}")
     return json.loads(result.stdout)
 
 
 def run_models(config, request):
     unit = request.get("magnitude_unit", "linear")
     records = validate_records(request.get("records"), unit)
-    missing = [LABELS[m["id"]] for m in config["models"] if not Path(m["checkpoint"]).is_file()]
+    ids = request.get('model_ids', [m['id'] for m in config['models']])
+    if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids) or any(key not in {m['id'] for m in config['models']} for key in ids):
+        raise ValueError('请选择有效且不重复的模型')
+    config = dict(config, models=[m for m in config['models'] if m['id'] in ids])
+    evaluator_id = request.get('evaluation_model', config['evaluation_model'])
+    if evaluator_id not in ids:
+        raise ValueError('共用响应评估器须从本次选中的模型中选择')
+    config['evaluation_model'] = evaluator_id
+    missing = [m.get('label', m['id']) for m in config["models"] if not Path(m["checkpoint"]).is_file()]
     if missing:
-        raise ValueError("尚未找到正式训练权重：" + "、".join(missing) + "。请完成训练并修改 config/models.json；示例按钮可先预览。")
+        raise ValueError("尚未找到训练权重：" + "、".join(missing) + "。请先完成训练或配置本地权重。")
     generated = []
     for model in config["models"]:
         generated.append(worker(config, model, {"records": records, "magnitude_unit": unit}))
     metadata = [g["metadata"] for g in generated]
     comparison_verification = validate_comparison(metadata) if config.get("require_same_training_data", True) else "disabled_by_configuration"
     if len({m["length_unit"] for m in metadata}) != 1 or any(m["bounds"] != metadata[0]["bounds"] for m in metadata):
-        raise ValueError("三个模型的电长度单位或长度范围不一致")
+        raise ValueError("所选模型的电长度单位或长度范围不一致")
     candidate_sets = [{m["id"]: generated[j]["candidates"][i] for j, m in enumerate(config["models"])} for i in range(len(records))]
     evaluator = next(m for m in config["models"] if m["id"] == config["evaluation_model"])
     scored = worker(config, evaluator, {"mode": "score", "records": records, "magnitude_unit": unit, "candidate_sets": candidate_sets})
     results, provisional = [], []
     for record, per_model in zip(records, scored["evaluated"]):
         for model_id, prediction in per_model.items():
-            results.append({**record, "model_id": model_id, "model_label": LABELS[model_id], **prediction})
+            label = next(m.get('label', model_id) for m in config['models'] if m['id'] == model_id)
+            results.append({**record, "model_id": model_id, "model_label": label, **prediction})
         best = min(per_model, key=lambda mid: per_model[mid]["estimated_reflected_power_ratio"])
         provisional.append({**record, "model_id": best, **per_model[best]})
     bundle = {"mode": "inference", "created_at": datetime.now(timezone.utc).isoformat(),
               "magnitude_unit": unit, "records": records, "predictions": results,
               "estimated_recommendations": provisional, "metadata": metadata,
               "evaluation_model": config["evaluation_model"],
+              "models": [{k: m.get(k, m['id']) for k in ('id', 'label', 'type')} for m in config['models']],
               "training_comparison_verification": comparison_verification,
               "selection_status": "awaiting_waveforms", "waveforms": [],
               "notice": "预计结果由同一个响应代理评分；动态稳定性须由同工况实测或仿真功率波形验证。"}
@@ -180,6 +200,11 @@ def analyze_waveforms(request):
         raise ValueError("波形来源应为 measured、simulation 或 demo")
     required = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w")
     groups = {}
+    model_ids = request.get('model_ids')
+    if model_ids is None:
+        model_ids = list(dict.fromkeys(str(row.get('model_id', '')).strip() for row in rows))
+    if not isinstance(model_ids, list) or not model_ids or len(set(model_ids)) != len(model_ids) or not all(valid_id(key) for key in model_ids):
+        raise ValueError('波形模型列表无效')
     power_channels = {}
     identities = set()
     sources_in_rows = set()
@@ -187,7 +212,7 @@ def analyze_waveforms(request):
         if any(row.get(key) is None or str(row.get(key)).strip() == "" for key in required):
             raise ValueError("波形必须包含 " + ",".join(required))
         model_id = str(row["model_id"]).strip()
-        if model_id not in MODEL_IDS:
+        if model_id not in model_ids:
             raise ValueError(f"未知 model_id：{model_id}")
         identity = tuple(str(row[k]).strip() for k in ("run_id", "sample_id", "scenario_id"))
         identities.add(identity)
@@ -233,9 +258,9 @@ def analyze_waveforms(request):
         raise ValueError("min_steady_samples须为≥3的整数")
     metrics, grid, common_target = [], None, None
     normalized_rows = []
-    for model_id in MODEL_IDS:
+    for model_id in model_ids:
         if model_id not in groups:
-            raise ValueError("需要全部三个模型在相同工况下的波形")
+            raise ValueError("需要本次选中全部模型在相同工况下的波形")
         values = sorted(groups[model_id])
         times = [v[0] for v in values]
         if len(times) != len(set(times)):
@@ -243,14 +268,14 @@ def analyze_waveforms(request):
         if grid is None:
             grid = times
         elif len(grid) != len(times) or any(not math.isclose(a, b, rel_tol=1e-8, abs_tol=1e-9) for a, b in zip(grid, times)):
-            raise ValueError("三套波形须使用相同时间网格和观察时长；请在导出端统一采样")
+            raise ValueError("所有波形须使用相同时间网格和观察时长；请在导出端统一采样")
         target = values[0][2]
         if any(not math.isclose(target, v[2], rel_tol=1e-8) for v in values):
             raise ValueError("本版本每次比较使用固定目标功率；阶跃目标请按目标段分开")
         if common_target is None:
             common_target = target
         elif not math.isclose(target, common_target, rel_tol=1e-8):
-            raise ValueError("三个模型目标功率必须相同")
+            raise ValueError("所有模型目标功率必须相同")
         evaluation_start = settings.get("evaluation_start_s", times[0])
         evaluation_end = settings.get("evaluation_end_s", times[-1])
         if not times[0] <= evaluation_start < evaluation_end <= times[-1]:
@@ -285,7 +310,7 @@ def analyze_waveforms(request):
         last_bad = max((i for i, v in enumerate(evaluation_values) if abs(v[1] - target) / target * 100 > settings["max_error_pct"]), default=-1)
         if last_bad + 1 < len(evaluation_values) and evaluation_times[-1] - evaluation_times[last_bad + 1] >= duration * (1 - settings["steady_start_fraction"]):
             settling = evaluation_times[last_bad + 1] - evaluation_times[0]
-        metrics.append({"model_id": model_id, "model_label": LABELS[model_id], "stable": stable,
+        metrics.append({"model_id": model_id, "model_label": (request.get('model_labels') or {}).get(model_id, LABELS.get(model_id, model_id)), "stable": stable,
                         "mean_power_w": mean, "std_power_w": std, "cv_pct": cv, "ripple_pct": ripple,
                         "error_pct": error, "drift_pct": drift, "overshoot_pct": overshoot,
                         "settling_time_s": settling, "score": statistics.fmean(ratios),
@@ -296,7 +321,7 @@ def analyze_waveforms(request):
                                 "model_id": model_id, "time_s": t, "power_w": p, "target_w": target,
                                 "source": source, **power_channels.get((model_id, t), {})} for t, p, _ in values)
     if power_channels and len(power_channels) != len(rows):
-        raise ValueError("入射与反射通道需覆盖全部三个模型的全部采样点")
+        raise ValueError("入射与反射通道需覆盖全部模型的全部采样点")
     ranked = sorted(metrics, key=lambda m: (not m["stable"], m["score"], m["model_id"]))
     stable = [m for m in ranked if m["stable"]]
     return {"run_id": run_id, "sample_id": sample_id, "scenario_id": scenario_id, "source": source,
@@ -316,7 +341,7 @@ def export_bundle(bundle):
         raise ValueError("合成示例不能验证真实推理")
     sheets = []
     headers = ("sample_id", "model_id", "mag", "deg", "L1", "L2", "length_unit", "estimated_matched_mag", "estimated_matched_deg", "estimated_matched_real", "estimated_matched_imag", "estimated_reflected_power_ratio", "estimated_return_loss_db", "evaluator", "outside_training_input_box", "training_support_distance")
-    sheets.append(("三模型结果", headers, [[r.get(h) for h in headers] for r in predictions]))
+    sheets.append(("模型预测结果", headers, [[r.get(h) for h in headers] for r in predictions]))
     selected = bundle.get("estimated_recommendations", [])
     sheets.append(("预计推荐_待波形验证", headers, [[r.get(h) for h in headers] for r in selected]))
     metric_headers = ("model_id", "stable", "score", "mean_power_w", "cv_pct", "ripple_pct", "error_pct", "drift_pct", "overshoot_pct", "settling_time_s", "steady_samples", "duration_s")
