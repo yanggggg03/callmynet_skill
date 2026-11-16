@@ -26,6 +26,8 @@ The distributed configuration initially points to the three original `D:/Project
 - Bind traces to the current `run_id`, `sample_id`, and `scenario_id`. One waveform import compares one sample and one scenario. Do not attach stale traces or synthetic examples to a real inference run.
 - Thresholds evaluate the last 40% of the common observation window by default: CV ≤2%, peak-to-peak ripple/target ≤5%, mean target error ≤2%, linear drift/target ≤1%; full-trace overshoot ≤20%. These defaults are configurable engineering criteria, not device specifications. At least 20 steady-window samples and 0.1 seconds total duration are required by default.
 - A stable candidate must satisfy every limit. Rank passing candidates by the mean of metric/limit ratios. If none pass, report **no stable scheme**; the lowest score is diagnostic only. If scores tie, do not claim a meaningful measured advantage. Finite sampled traces do not prove mathematical or global stability.
+- Pulsed RF traces may include startup and shutdown. Set an explicit common `evaluation_start_s`/`evaluation_end_s` for the energized interval; the full trace remains available in the plot and Excel. Optional `incident_power_w`/`reflected_power_w` must satisfy `power_w = incident_power_w - reflected_power_w`. Channel switching changes the displayed trace; stability scores remain based on `power_w`.
+- The distributed 20 kW pulse example follows the qualitative shape in figures 3.41/3.42 of the cited ICRF thesis. All actions and per-model responses are presets, not digitized measurements or network inference. Its winner has no evidential meaning for the three networks.
 
 ## Deliver results
 

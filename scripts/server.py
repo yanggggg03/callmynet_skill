@@ -61,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                 if name == "input.xlsx":
                     columns = ("mag", "deg")
                 elif name == "waveforms.xlsx":
-                    columns = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w", "source")
+                    columns = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w", "source", "incident_power_w", "reflected_power_w")
                 else:
                     return self.send(404, {"error": "Unknown template"})
                 memory = io.BytesIO()

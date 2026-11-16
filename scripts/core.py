@@ -165,6 +165,7 @@ def analyze_waveforms(request):
         raise ValueError("波形来源应为 measured、simulation 或 demo")
     required = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w")
     groups = {}
+    power_channels = {}
     identities = set()
     sources_in_rows = set()
     for row in rows:
@@ -181,6 +182,17 @@ def analyze_waveforms(request):
         power, target = finite(row["power_w"], "power_w"), finite(row["target_w"], "target_w")
         if time < 0 or target <= 0 or power < 0:
             raise ValueError("time_s与power_w必须≥0，target_w必须>0")
+        has_incident = str(row.get("incident_power_w", "")).strip() != ""
+        has_reflected = str(row.get("reflected_power_w", "")).strip() != ""
+        if has_incident != has_reflected:
+            raise ValueError("入射和反射功率必须同时提供")
+        if has_incident:
+            incident = finite(row["incident_power_w"], "incident_power_w")
+            reflected = finite(row["reflected_power_w"], "reflected_power_w")
+            if not 0 <= reflected <= incident or not math.isclose(power, incident-reflected, rel_tol=1e-6, abs_tol=1e-5):
+                raise ValueError("须满足0≤反射功率≤入射功率，且power_w=入射功率-反射功率")
+            power_channels[(model_id, time)] = {"incident_power_w": incident, "reflected_power_w": reflected,
+                                               "reflected_power_ratio": reflected / incident if incident > 0 else None}
         groups.setdefault(model_id, []).append((time, power, target))
     if len(identities) != 1:
         raise ValueError("一次比较仅支持同一 run_id、sample_id、scenario_id，请按工况分开导入")
@@ -197,7 +209,10 @@ def analyze_waveforms(request):
                 "max_error_pct": 2.0, "max_drift_pct": 1.0, "max_overshoot_pct": 20.0,
                 "min_steady_samples": 20, "min_duration_s": 0.1}
     settings = {key: finite(options.get(key, default), key) for key, default in defaults.items()}
-    if not 0 < settings["steady_start_fraction"] < 1 or any(v <= 0 for k, v in settings.items() if k != "steady_start_fraction"):
+    for key in ("evaluation_start_s", "evaluation_end_s"):
+        if options.get(key) not in (None, ""):
+            settings[key] = finite(options[key], key)
+    if not 0 < settings["steady_start_fraction"] < 1 or any(v <= 0 for k, v in settings.items() if k not in ("steady_start_fraction", "evaluation_start_s", "evaluation_end_s")):
         raise ValueError("稳态窗口比例须在0～1内，各限值须为正数")
     if settings["min_steady_samples"] < 3 or not settings["min_steady_samples"].is_integer():
         raise ValueError("min_steady_samples须为≥3的整数")
@@ -221,11 +236,19 @@ def analyze_waveforms(request):
             common_target = target
         elif not math.isclose(target, common_target, rel_tol=1e-8):
             raise ValueError("三个模型目标功率必须相同")
-        duration = times[-1] - times[0]
+        evaluation_start = settings.get("evaluation_start_s", times[0])
+        evaluation_end = settings.get("evaluation_end_s", times[-1])
+        if not times[0] <= evaluation_start < evaluation_end <= times[-1]:
+            raise ValueError("评估窗口须在波形时间范围内，且起点小于终点")
+        evaluation_values = [v for v in values if evaluation_start <= v[0] <= evaluation_end]
+        if len(evaluation_values) < 3:
+            raise ValueError("评估窗口采样点不足")
+        evaluation_times = [v[0] for v in evaluation_values]
+        duration = evaluation_times[-1] - evaluation_times[0]
         if duration < settings["min_duration_s"]:
             raise ValueError("观察时长不足，请补充数据或按装置时间尺度配置最小时长")
-        steady_start = times[0] + duration * settings["steady_start_fraction"]
-        tail = [v for v in values if v[0] >= steady_start]
+        steady_start = evaluation_times[0] + duration * settings["steady_start_fraction"]
+        tail = [v for v in evaluation_values if v[0] >= steady_start]
         if len(tail) < settings["min_steady_samples"]:
             raise ValueError("稳态窗口采样点不足")
         powers = [v[1] for v in tail]
@@ -238,23 +261,27 @@ def analyze_waveforms(request):
         denominator = sum((v[0] - center) ** 2 for v in tail)
         slope = sum((v[0] - center) * (v[1] - mean) for v in tail) / denominator
         drift = abs(slope) * (tail[-1][0] - tail[0][0]) / target * 100
-        overshoot = max(0, max(v[1] for v in values) - target) / target * 100
+        overshoot = max(0, max(v[1] for v in evaluation_values) - target) / target * 100
         ratios = [cv / settings["max_cv_pct"], ripple / settings["max_ripple_pct"],
                   error / settings["max_error_pct"], drift / settings["max_drift_pct"],
                   overshoot / settings["max_overshoot_pct"]]
         stable = all(r <= 1 for r in ratios)
         settling = None
-        last_bad = max((i for i, v in enumerate(values) if abs(v[1] - target) / target * 100 > settings["max_error_pct"]), default=-1)
-        if last_bad + 1 < len(values) and times[-1] - times[last_bad + 1] >= duration * (1 - settings["steady_start_fraction"]):
-            settling = times[last_bad + 1] - times[0]
+        last_bad = max((i for i, v in enumerate(evaluation_values) if abs(v[1] - target) / target * 100 > settings["max_error_pct"]), default=-1)
+        if last_bad + 1 < len(evaluation_values) and evaluation_times[-1] - evaluation_times[last_bad + 1] >= duration * (1 - settings["steady_start_fraction"]):
+            settling = evaluation_times[last_bad + 1] - evaluation_times[0]
         metrics.append({"model_id": model_id, "model_label": LABELS[model_id], "stable": stable,
                         "mean_power_w": mean, "std_power_w": std, "cv_pct": cv, "ripple_pct": ripple,
                         "error_pct": error, "drift_pct": drift, "overshoot_pct": overshoot,
                         "settling_time_s": settling, "score": statistics.fmean(ratios),
-                        "steady_samples": len(tail), "duration_s": duration})
+                        "steady_samples": len(tail), "duration_s": duration,
+                        "evaluation_start_s": evaluation_times[0], "evaluation_end_s": evaluation_times[-1],
+                        "steady_start_s": steady_start})
         normalized_rows.extend({"run_id": run_id, "sample_id": sample_id, "scenario_id": scenario_id,
                                 "model_id": model_id, "time_s": t, "power_w": p, "target_w": target,
-                                "source": source} for t, p, _ in values)
+                                "source": source, **power_channels.get((model_id, t), {})} for t, p, _ in values)
+    if power_channels and len(power_channels) != len(rows):
+        raise ValueError("入射与反射通道需覆盖全部三个模型的全部采样点")
     ranked = sorted(metrics, key=lambda m: (not m["stable"], m["score"], m["model_id"]))
     stable = [m for m in ranked if m["stable"]]
     return {"run_id": run_id, "sample_id": sample_id, "scenario_id": scenario_id, "source": source,
@@ -279,7 +306,7 @@ def export_bundle(bundle):
     sheets.append(("预计推荐_待波形验证", headers, [[r.get(h) for h in headers] for r in selected]))
     metric_headers = ("model_id", "stable", "score", "mean_power_w", "cv_pct", "ripple_pct", "error_pct", "drift_pct", "overshoot_pct", "settling_time_s", "steady_samples", "duration_s")
     sheets.append(("稳定性评估", metric_headers, [[m.get(h) for h in metric_headers] for m in analysis.get("metrics", [])]))
-    wave_headers = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w", "source")
+    wave_headers = ("run_id", "sample_id", "scenario_id", "model_id", "time_s", "power_w", "target_w", "source", "incident_power_w", "reflected_power_w", "reflected_power_ratio")
     sheets.append(("功率波形", wave_headers, [[r.get(h) for h in wave_headers] for r in analysis.get("waveforms", [])]))
     winner = analysis.get("winner")
     confirmed = [r for r in predictions if r["model_id"] == winner and str(r["sample_id"]) == str(analysis.get("sample_id")) and bundle.get("run_id") == analysis.get("run_id")]
@@ -290,6 +317,7 @@ def export_bundle(bundle):
              "波形优胜模型": winner or "没有已验证稳定方案", "阈值": analysis.get("settings", {}),
              "说明": "estimated字段为代理估计；demo为合成示例；稳定性结论仅适用于当前观察窗口和阈值。",
              "模型记录": bundle.get("metadata", [])}
+    notes["波形形态参考"] = bundle.get("waveform_reference", {})
     if analysis and bundle.get("mode") == "inference" and (analysis.get("run_id") != bundle.get("run_id") or analysis.get("source") == "demo"):
         raise ValueError("不能用示例波形或其他推理批次的波形验证真实推荐")
     sheets.append(("说明", ("项目", "内容"), list(notes.items())))

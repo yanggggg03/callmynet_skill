@@ -27,6 +27,29 @@ def traces(powers=None):
 
 
 class StabilityTests(unittest.TestCase):
+    def test_pulse_off_segments_excluded_only_by_explicit_window(self):
+        demo = make_demo()
+        analysis = demo["waveform_analysis"]
+        self.assertTrue(all(m["stable"] for m in analysis["metrics"]))
+        self.assertTrue(any(r["time_s"] > 6 and r["power_w"] == 0 for r in analysis["waveforms"]))
+        self.assertEqual(analysis["metrics"][0]["evaluation_end_s"], 5.95)
+        result = analyze_waveforms({"rows": analysis["waveforms"], "source": "demo"})
+        self.assertIsNone(result["winner"])
+
+    def test_optional_power_channels_are_physical_and_preserved(self):
+        demo = make_demo()["waveform_analysis"]
+        self.assertEqual(len(demo["waveforms"]), 2103)
+        for row in demo["waveforms"]:
+            self.assertAlmostEqual(row["power_w"], row["incident_power_w"] - row["reflected_power_w"])
+        bad = copy.deepcopy(demo["waveforms"])
+        bad[150]["reflected_power_w"] = bad[150]["incident_power_w"] + 1
+        with self.assertRaisesRegex(ValueError, "反射功率"):
+            analyze_waveforms({"rows": bad, "source": "demo"})
+
+    def test_invalid_evaluation_window_rejected(self):
+        with self.assertRaisesRegex(ValueError, "评估窗口"):
+            analyze_waveforms({"rows": traces(), "options": {"evaluation_start_s": 2, "evaluation_end_s": 3}})
+
     def test_zero_power_is_not_stable_despite_zero_variance(self):
         result = analyze_waveforms({"rows": traces({"residual_mlp": lambda t: 0}), "source": "measured"})
         bad = next(m for m in result["metrics"] if m["model_id"] == "residual_mlp")

@@ -49,9 +49,19 @@ async function upload(file) {
   });
   return {filename:file.name,content_base64:encoded};
 }
-function options() { return Object.fromEntries(configurationKeys.map(key=>[key,Number($(key).value)])); }
+function options() {
+  const result=Object.fromEntries(configurationKeys.map(key=>[key,Number($(key).value)]));
+  for(const key of ['evaluation_start_s','evaluation_end_s'])if($(key).value.trim()!=='')result[key]=Number($(key).value);
+  return result;
+}
 function useBundle(bundle) {
   S.bundle=bundle;S.analysis=bundle.waveform_analysis || null;
+  if(bundle.mode==='demo'){
+    $('unit').value=bundle.magnitude_unit;
+    if(!S.batch){$('mag').value=bundle.records[0].mag;$('deg').value=bundle.records[0].deg;}
+  }
+  for(const key of ['evaluation_start_s','evaluation_end_s'])$(key).value=S.analysis?.settings[key]??'';
+  if(S.analysis)for(const key of configurationKeys)if(S.analysis.settings[key]!==undefined)$(key).value=S.analysis.settings[key];
   $('sample-select').innerHTML=bundle.records.map(r=>`<option value="${escapeHTML(r.sample_id)}">${escapeHTML(r.sample_id)}</option>`).join('');
   $('result-empty').classList.add('hidden');$('result-data').classList.remove('hidden');$('export').disabled=false;
   $('result-mode').textContent=bundle.mode==='demo'?'合成示例':'模型推理';$('result-mode').className='badge '+(bundle.mode==='demo'?'demo':'success');
@@ -71,7 +81,7 @@ function renderResults() {
   if(winner){
     const result=records.find(r=>r.model_id===winner);
     title=prefix+LABELS[winner];caption='波形比较中满足稳定性判据的最佳方案';
-    detail=`L1 ${num(result.L1)} ${result.length_unit} · L2 ${num(result.L2)} ${result.length_unit} · ${S.analysis.source==='measured'?'实测':S.analysis.source==='simulation'?'仿真':'示例'}功率波形`;
+    detail=`L1 ${num(result.L1)} ${result.length_unit} · L2 ${num(result.L2)} ${result.length_unit} · ${S.analysis.source==='measured'?'实测':S.analysis.source==='simulation'?'仿真':'预设示意'}功率波形`;
   } else if(verified) {
     title='三套方案均未满足稳定性判据';caption=prefix+'当前工况的波形比较';detail='请检查波形、调节方案与设备要求，不将最低分方案标记为稳定方案。';
   } else {
@@ -80,7 +90,7 @@ function renderResults() {
   $('recommendation').innerHTML=`<span class="caption">${escapeHTML(caption)}</span><strong>${escapeHTML(title)}</strong><p>${escapeHTML(detail)}</p>`;
   document.querySelectorAll('.length-unit').forEach(el=>el.textContent=records[0].length_unit==='deg'?'°':records[0].length_unit);
   $('result-rows').innerHTML=records.map(r=>`<tr class="${r.model_id===(winner || provisional.model_id)?'best':''}"><td>${escapeHTML(LABELS[r.model_id])}${r.outside_training_input_box?'<small>超出训练输入范围</small>':''}</td><td>${num(r.L1)}</td><td>${num(r.L2)}</td><td>${num(r.estimated_matched_mag,4)}</td><td>${num(r.estimated_reflected_power_ratio*100,3)}%</td></tr>`).join('');
-  $('result-note').textContent=S.bundle.mode==='demo'?'本页数值为合成示例，不能作为训练结果或比赛性能证明。':'预计匹配幅值与反射比由统一响应代理计算，不是新调节后的实测。三模型全部使用相同评估器。';
+  $('result-note').textContent=S.bundle.mode==='demo'?'示例动作与响应均为预设值；曲线参考论文脉冲形态，不能用来判断三个网络的真实优劣。':'预计匹配幅值与反射比由统一响应代理计算，不是新调节后的实测。三模型全部使用相同评估器。';
 }
 function renderAnalysis() {
   const analysis=S.analysis;
@@ -92,6 +102,9 @@ function renderAnalysis() {
     $('metric-table').innerHTML='';return;
   }
   const source={demo:'合成示例',measured:'实测波形',simulation:'仿真波形'}[analysis.source];
+  const hasChannels=analysis.waveforms.every(r=>r.incident_power_w!==undefined&&r.reflected_power_w!==undefined);
+  for(const option of $('power-channel').querySelectorAll('option'))if(option.value!=='power_w')option.disabled=!hasChannels;
+  if(!hasChannels)$('power-channel').value='power_w';
   $('wave-source').textContent=source+' · 样本 '+analysis.sample_id;$('wave-source').className='badge '+(analysis.source==='demo'?'demo':'success');
   const best=analysis.metrics[0];
   $('metrics').innerHTML=`<div><span>首选方案 CV</span><strong>${num(best.cv_pct)}<small>%</small></strong></div><div><span>峰峰纹波 / 目标</span><strong>${num(best.ripple_pct)}<small>%</small></strong></div><div><span>稳态偏差</span><strong>${num(best.error_pct)}<small>%</small></strong></div><div><span>${analysis.winner?escapeHTML(LABELS[analysis.winner]):'全部方案'}</span><strong class="${analysis.winner?'positive':'negative'}">${analysis.winner?'满足判据':'未达标'}</strong></div>`;
@@ -101,20 +114,25 @@ function renderAnalysis() {
 function renderChart() {
   const analysis=S.analysis;if(!analysis)return;
   const all=analysis.waveforms; const svg=$('chart');
+  const channel=$('power-channel').value||'power_w';
+  const field=row=>row[channel]??row.power_w;
   const times=all.filter(r=>r.model_id===IDS[0]).map(r=>r.time_s);
   const begin=times[0], end=times[times.length-1], duration=end-begin;
   const zoom=Number($('zoom').value), span=duration/zoom;
   const low=begin+(duration-span)*Number($('pan').value)/100, high=low+span;
   const windowed=all.filter(r=>r.time_s>=low && r.time_s<=high && S.visible.has(r.model_id));
-  const target=all[0].target_w;
+  const target=channel==='reflected_power_w'?0:all[0].target_w;
   let min=target,max=target;
-  for(const row of windowed){min=Math.min(min,row.power_w);max=Math.max(max,row.power_w);}
-  const padding=Math.max((max-min)*.14,target*.005);min-=padding;max+=padding;
+  for(const row of windowed){min=Math.min(min,field(row));max=Math.max(max,field(row));}
+  const padding=Math.max((max-min)*.14,all[0].target_w*.005);min-=padding;max+=padding;
   const box={left:60,right:700,top:22,bottom:265};
   const x=t=>box.left+(t-low)/span*(box.right-box.left);
   const y=p=>box.bottom-(p-min)/(max-min)*(box.bottom-box.top);
-  const steadyStart=begin+duration*analysis.settings.steady_start_fraction;
-  let markup=`<rect x="${x(Math.max(low,steadyStart))}" y="${box.top}" width="${Math.max(0,box.right-x(Math.max(low,steadyStart)))}" height="${box.bottom-box.top}" fill="#f2f8f5"/>`;
+  const evaluationStart=analysis.settings.evaluation_start_s??begin;
+  const evaluationEnd=analysis.settings.evaluation_end_s??end;
+  const steadyStart=evaluationStart+(evaluationEnd-evaluationStart)*analysis.settings.steady_start_fraction;
+  const shadeStart=Math.max(low,steadyStart),shadeEnd=Math.min(high,evaluationEnd);
+  let markup=`<rect x="${x(shadeStart)}" y="${box.top}" width="${Math.max(0,x(shadeEnd)-x(shadeStart))}" height="${box.bottom-box.top}" fill="#f2f8f5"/>`;
   for(let n=0;n<=4;n++){
     const py=box.top+(box.bottom-box.top)*n/4;const value=max-(max-min)*n/4;
     markup+=`<line x1="${box.left}" y1="${py}" x2="${box.right}" y2="${py}" stroke="#e9eef1"/><text x="${box.left-9}" y="${py+4}" text-anchor="end" fill="#98a6af" font-size="10">${num(value,0)}</text>`;
@@ -123,13 +141,14 @@ function renderChart() {
     const time=low+span*n/5;markup+=`<text x="${x(time)}" y="${box.bottom+21}" text-anchor="middle" fill="#98a6af" font-size="10">${num(time,2)}</text>`;
   }
   markup+=`<text x="17" y="15" fill="#8b9ca6" font-size="10">功率 / W</text><text x="700" y="305" text-anchor="end" fill="#8b9ca6" font-size="10">时间 / s</text><line x1="${box.left}" y1="${y(target)}" x2="${box.right}" y2="${y(target)}" stroke="#9aa8b1" stroke-dasharray="5 5"/>`;
+  if(channel==='reflected_power_w'&&all[0].target_w*.05>=min&&all[0].target_w*.05<=max){const py=y(all[0].target_w*.05);markup+=`<line x1="${box.left}" y1="${py}" x2="${box.right}" y2="${py}" stroke="#c49b63" stroke-dasharray="3 4"/><text x="${box.right-4}" y="${py-6}" text-anchor="end" fill="#ad8a55" font-size="9">5%目标功率参考线</text>`;}
   for(const id of IDS){
     if(!S.visible.has(id))continue;
     const points=all.filter(r=>r.model_id===id&&r.time_s>=low&&r.time_s<=high);
     // At most 1400 displayed points per line. Export always preserves the full input.
     const stride=Math.max(1,Math.ceil(points.length/1400));
     const selected=points.filter((_,i)=>i%stride===0||i===points.length-1);
-    markup+=`<path d="${selected.map((r,i)=>(i?'L':'M')+x(r.time_s).toFixed(2)+','+y(r.power_w).toFixed(2)).join(' ')}" fill="none" stroke="${COLORS[id]}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+    markup+=`<path d="${selected.map((r,i)=>(i?'L':'M')+x(r.time_s).toFixed(2)+','+y(field(r)).toFixed(2)).join(' ')}" fill="none" stroke="${COLORS[id]}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
   }
   if(steadyStart>=low&&steadyStart<=high)markup+=`<text x="${x(steadyStart)+7}" y="${box.top+13}" font-size="9" fill="#91ac9f">稳态观察窗口</text>`;
   svg.innerHTML=markup;
@@ -142,7 +161,7 @@ function renderChart() {
       const values=all.filter(r=>r.model_id===id);
       let l=0,h=values.length-1;while(l<h){const mid=(l+h)>>1;if(values[mid].time_s<time)l=mid+1;else h=mid;}
       const row=l>0 && Math.abs(values[l-1].time_s-time)<Math.abs(values[l].time_s-time)?values[l-1]:values[l];
-      html+=`<br><span style="color:${COLORS[id]}">●</span> ${LABELS[id]} ${num(row.power_w)} W`;
+      html+=`<br><span style="color:${COLORS[id]}">●</span> ${LABELS[id]} ${num(field(row))} W`;
     }
     $('chart-tooltip').innerHTML=html;$('chart-tooltip').classList.remove('hidden');
   };
@@ -175,10 +194,10 @@ function localWorkbook(sheets){
 function exportLocally(){
   const b=S.bundle,a=S.analysis || {},headers=['sample_id','model_id','mag','deg','L1','L2','length_unit','estimated_matched_mag','estimated_reflected_power_ratio','evaluator'];
   const metric=['model_id','stable','score','mean_power_w','cv_pct','ripple_pct','error_pct','drift_pct','overshoot_pct','settling_time_s'];
-  const wave=['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source'];
+  const wave=['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source','incident_power_w','reflected_power_w','reflected_power_ratio'];
   const sheet=(name,keys,rows)=>({name,headers:keys,rows:rows.map(r=>keys.map(k=>r[k]??''))});
   const confirmed=b.predictions.filter(r=>r.model_id===a.winner&&String(r.sample_id)===String(a.sample_id)&&b.run_id===a.run_id);
-  return localWorkbook([sheet('三模型结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['说明',b.notice]]}]);
+  return localWorkbook([sheet('三模型结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['波形参考',JSON.stringify(b.waveform_reference||{})],['说明',b.notice]]}]);
 }
 async function getDemo(){
   const response=await fetch('assets/demo.json');if(!response.ok)throw Error('未找到示例文件');return response.json();
@@ -201,9 +220,10 @@ $('wave-file').onchange=event=>busy(async()=>{const file=event.target.files[0];i
 $('reanalyze').onclick=()=>busy(async()=>{if(!S.analysis)return;const response=await api('/api/analyze-waveforms',{rows:S.analysis.waveforms,source:S.analysis.source,expected_run_id:S.bundle?.run_id,options:options()});S.analysis=response;S.bundle.waveform_analysis=response;renderAnalysis();if(S.bundle.predictions.length)renderResults();notice('已按更新后的判据重新比较。',response.source==='demo'?'demo':'');});
 $('export').onclick=()=>busy(async()=>{if(!S.bundle)return;download(exportLocally(),(S.bundle.mode==='demo'?'DEMO_':'')+'matching_results.xlsx');});
 $('input-template').onclick=()=>download(localWorkbook([{name:'input',headers:['mag','deg'],rows:[]}]),'prediction_template.xlsx');
-$('wave-template').onclick=()=>download(localWorkbook([{name:'waveforms',headers:['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source'],rows:[]}]),'waveform_template.xlsx');
+$('wave-template').onclick=()=>download(localWorkbook([{name:'waveforms',headers:['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source','incident_power_w','reflected_power_w'],rows:[]}]),'waveform_template.xlsx');
 document.querySelectorAll('#legend button').forEach(button=>button.onclick=()=>{const id=button.dataset.model;if(S.visible.has(id)){if(S.visible.size===1)return;S.visible.delete(id);}else S.visible.add(id);button.classList.toggle('off',!S.visible.has(id));renderChart();});
 $('zoom').oninput=$('pan').oninput=renderChart;
+$('power-channel').onchange=renderChart;
 $('reset-zoom').onclick=()=>{$('zoom').value=1;$('pan').value=0;renderChart();};
 health();
 if(new URLSearchParams(location.search).get('demo')==='1')busy(async()=>useBundle(await getDemo()));
