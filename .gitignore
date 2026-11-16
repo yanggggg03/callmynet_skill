@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.pt
+*.pth
+*.onnx
+runs/
+results/
+config/*.local.json
+*.log
+*.xlsx
+!assets/*template.xlsx
+!assets/demo_*.xlsx
+.DS_Store

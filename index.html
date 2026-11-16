@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CallMyNet · 三模型调节工作台</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="./"><span class="brand-mark">≈</span><span>CallMyNet <small>调节工作台</small></span></a><div class="top-right"><span class="connection" id="connection">正在连接本地服务</span><a href="https://github.com/yanggggg03/callmynet_skill" target="_blank" rel="noreferrer">GitHub ↗</a><button class="quiet" id="settings-toggle">连接设置</button></div></header>
+  <main>
+    <section class="intro"><div><div class="eyebrow">RF MATCHING / MODEL COMPARISON</div><h1>三个网络，一个更稳的选择。</h1><p>载入训练权重，比较支节调节方案，用功率波形检验调节效果。</p></div><span class="local-badge">● 本地推理 · 数据留在本机</span></section>
+    <section class="settings hidden" id="settings"><label>推理服务地址 <input id="api-url" placeholder="http://127.0.0.1:8765"></label><button id="connect">连接服务</button><p>本地运行时留空即可。GitHub 页面需先启动本地服务并允许页面来源；浏览器若限制连接，请直接打开本地面板。</p></section>
+    <div class="notice" id="notice" role="status">正式权重尚未接入时，可以先载入合成示例，体验面板与 Excel 导出。</div>
+    <section class="input-panel card">
+      <div class="section-heading"><div><span class="step">01</span><h2>输入工况</h2></div><div class="model-chips" id="model-chips"><span>残差 MLP</span><span>Fourier ResMLP</span><span>条件 Flow</span></div></div>
+      <div class="input-grid"><label>反射系数幅值<input id="mag" type="number" value="0.4" step="0.01"></label><label>反射相位 / °<input id="deg" type="number" value="60" step="1"></label><label>幅值单位<select id="unit"><option value="linear">线性幅值</option><option value="db">S11 / dB</option></select></label><div class="input-actions"><button class="primary" id="run">运行三个模型 <span>→</span></button><button class="secondary" id="demo">载入示例</button></div></div>
+      <div class="input-footer"><label class="file-button">↥ 导入输入 Excel / CSV<input type="file" id="input-file" accept=".xlsx,.csv"></label><button class="link" id="input-template">下载输入模板</button><span id="input-summary">单条输入 · mag, deg</span><button class="link hidden" id="clear-batch">恢复单条输入</button></div>
+    </section>
+    <div class="workspace">
+      <section class="card results-panel">
+        <div class="section-heading"><div><span class="step">02</span><h2>调节结果</h2></div><span id="result-mode" class="badge">待运行</span></div>
+        <div class="tabs" role="tablist"><button class="active" id="tab-results" role="tab" aria-selected="true">输出结果</button><button id="tab-example" role="tab" aria-selected="false">示例与说明</button></div>
+        <div id="results-content"><div class="empty" id="result-empty"><span class="empty-icon">↗</span><h3>等待第一组调节方案</h3><p>运行模型或载入示例，查看推荐的 L1、L2 与三模型比较。</p></div><div id="result-data" class="hidden"><div class="recommendation" id="recommendation"></div><div class="sample-toolbar"><label>查看样本 <select id="sample-select"></select></label><span id="run-id"></span></div><div class="table-scroll"><table><thead><tr><th>模型</th><th>L1 / <span class="length-unit">°</span></th><th>L2 / <span class="length-unit">°</span></th><th>预计 |Γ|</th><th>预计反射比</th></tr></thead><tbody id="result-rows"></tbody></table></div><p class="helper" id="result-note"></p></div></div>
+        <div id="example-content" class="hidden example-copy"><h3>从输入到输出</h3><p>输入 <code>mag = 0.4</code>、<code>deg = 60°</code>，三个网络分别生成支节电长度候选。统一响应代理给所有候选评分，避免各模型给自己打分。</p><div class="example-equation"><span>幅值 + 相位</span><b>→</b><span>三模型候选</span><b>→</b><span>L1、L2</span></div><h3>示例与真实结果</h3><p>“载入示例”使用合成数值，仅展示交互方式；不会读取测试权重或代表真实模型精度。</p><h3>功率波形接口</h3><p>为三种推荐方案分别实测或仿真，使用同一初始工况、目标功率和采样网格。导入表中填写本次 <code>run_id</code>、<code>sample_id</code> 与 <code>scenario_id</code>。</p><p class="helper">网络目前处理独立幅相样本。没有动态数据时，仅能给出预计匹配推荐。</p></div>
+        <div class="download-bar"><span>结果、比较指标与波形一并保存</span><button id="export" class="secondary" disabled>↓ 下载 Excel</button></div>
+      </section>
+      <section class="card waveform-panel">
+        <div class="section-heading"><div><span class="step">03</span><h2>功率波形</h2></div><span class="badge" id="wave-source">待接入</span></div>
+        <div class="wave-toolbar"><div class="legend" id="legend"><button data-model="residual_mlp"><i class="dot blue"></i>残差 MLP</button><button data-model="fourier_resmlp"><i class="dot amber"></i>Fourier</button><button data-model="conditional_flow"><i class="dot green"></i>Flow</button><span><i class="target-dash"></i>目标</span></div><button class="link" id="reset-zoom">重置视图</button></div>
+        <div id="chart-box"><div id="wave-empty" class="empty"><span class="empty-icon">∿</span><h3>让调节效果看得见</h3><p>导入功率时间序列，观察收敛、振荡和稳态偏差。</p></div><svg id="chart" class="hidden" viewBox="0 0 720 310" role="img" aria-label="三模型功率波形对比"></svg><div id="chart-tooltip" class="chart-tooltip hidden"></div></div>
+        <div class="zoom-control hidden" id="zoom-control"><label>时间缩放 <input id="zoom" type="range" min="1" max="8" step="0.2" value="1"></label><label>观察位置 <input id="pan" type="range" min="0" max="100" value="0"></label></div>
+        <div id="metrics" class="metrics"><div><span>稳态波动 CV</span><strong>—</strong></div><div><span>峰峰纹波 / 目标</span><strong>—</strong></div><div><span>稳态偏差</span><strong>—</strong></div><div><span>调节判定</span><strong>待验证</strong></div></div>
+        <div class="wave-import"><label class="file-button">↥ 导入功率 Excel / CSV<input type="file" id="wave-file" accept=".xlsx,.csv"></label><select id="wave-source-select" aria-label="波形来源"><option value="measured">实测数据</option><option value="simulation">仿真数据</option><option value="demo">合成示例</option></select><button class="link" id="wave-template">下载波形模板</button></div>
+        <details class="thresholds"><summary>稳定性判据与比较明细 <span>可调整</span></summary><p>默认使用最后40%时间段；CV≤2%、峰峰纹波≤5%、稳态偏差≤2%、漂移≤1%、全程超调≤20%。所有指标均达标后，按归一化指标均值选优。阈值需按设备要求调整。</p><div class="threshold-grid"><label>CV 上限 / %<input id="max_cv_pct" type="number" value="2" min="0.01" step="0.1"></label><label>纹波上限 / %<input id="max_ripple_pct" type="number" value="5" min="0.01" step="0.1"></label><label>偏差上限 / %<input id="max_error_pct" type="number" value="2" min="0.01" step="0.1"></label><label>漂移上限 / %<input id="max_drift_pct" type="number" value="1" min="0.01" step="0.1"></label><label>超调上限 / %<input id="max_overshoot_pct" type="number" value="20" min="0.01" step="1"></label><label>稳态起点 / 时间比例<input id="steady_start_fraction" type="number" value="0.6" min="0.01" max="0.99" step="0.05"></label></div><button class="secondary" id="reanalyze" disabled>应用判据并重新比较</button><div class="table-scroll" id="metric-table"></div><p class="helper">稳定判定仅描述当前工况、阈值与观察窗口。若三者均未达标，会明确显示“没有稳定方案”。</p></details>
+      </section>
+    </div>
+    <footer><span>CallMyNet / 开放的模型调节工作台</span><span id="footer-state">推理在本地运行 · 支持 Skill 与 HTTP API 调用</span></footer>
+  </main><script src="assets/app.js"></script>
+</body></html>

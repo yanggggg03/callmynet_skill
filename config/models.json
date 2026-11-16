@@ -1,0 +1,28 @@
+{
+  "python_executable": "",
+  "device": "cpu",
+  "threads": 2,
+  "seed": 42,
+  "flow_candidates": 32,
+  "evaluation_model": "residual_mlp",
+  "require_same_training_data": true,
+  "timeout_seconds": 180,
+  "allowed_origins": [],
+  "models": [
+    {
+      "id": "residual_mlp",
+      "label": "残差 MLP",
+      "checkpoint": "D:/Projects/competition_01_physics_residual/runs/measured/best.pt"
+    },
+    {
+      "id": "fourier_resmlp",
+      "label": "Fourier ResMLP",
+      "checkpoint": "D:/Projects/competition_02_fourier_transformer/runs/measured/best.pt"
+    },
+    {
+      "id": "conditional_flow",
+      "label": "条件 Flow",
+      "checkpoint": "D:/Projects/competition_03_conditional_flow/runs/measured/best.pt"
+    }
+  ]
+}
