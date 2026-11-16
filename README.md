@@ -30,6 +30,8 @@ python -B scripts/server.py
 
 ## 面板
 
+最终返回的匹配效果为**反射系数**：线性幅值 `estimated_matched_mag = |Γ|`（0～1、无量纲，非百分比）与相位 `estimated_matched_deg`（°）。API和Excel同时保存实部/虚部 `estimated_matched_real/imag`；功率比 `estimated_reflected_power_ratio=|Γ|²` 为辅助字段。所有预计值均来自响应代理，不因波形达标而变为实测反射系数。
+
 - **结果区**：输出结果/示例说明、样本切换、三模型表格、预计或波形验证后的推荐、Excel下载。
 - **波形区**：三方案与目标功率曲线、入射/反射/净输入功率通道、悬浮读数、时间缩放、波形导入、共同有功率窗口、阈值配置和稳定性比较。
 - **Excel**：三模型结果、预计推荐、稳定指标、完整功率样本、波形选优结果和来源说明。

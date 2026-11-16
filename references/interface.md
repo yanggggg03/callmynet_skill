@@ -97,6 +97,8 @@ run_id,sample_id,scenario_id,model_id,time_s,power_w,target_w,source
 
 返回含 `run_id,records,predictions,estimated_recommendations,metadata`。`predictions` 保留全部三模型，每条含 `sample_id,model_id,L1,L2,length_unit,estimated_matched_mag,estimated_reflected_power_ratio,evaluator` 等。
 
+主要返回量是匹配后反射系数：`estimated_matched_mag`是线性幅值，`estimated_matched_deg`是相位°，`estimated_matched_real/imag`是复反射系数实部与虚部。幅值不带百分号，满足 `|Γ|=sqrt(real²+imag²)`。辅助功率比为 `estimated_reflected_power_ratio=|Γ|²`。面板显示幅值和相位，Excel/API保留全部分量。功率波形只能验证功率稳定性；若没有新的幅相测量，展示的反射系数仍为代理估计。
+
 波形分析请求：
 
 ```json

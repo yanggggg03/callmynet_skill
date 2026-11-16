@@ -102,6 +102,19 @@ class StabilityTests(unittest.TestCase):
 
 
 class InterchangeTests(unittest.TestCase):
+    def test_returned_reflection_coefficient_has_magnitude_phase_and_components(self):
+        demo = make_demo()
+        for row in demo["predictions"]:
+            real, imag = row["estimated_matched_real"], row["estimated_matched_imag"]
+            self.assertAlmostEqual(math.hypot(real, imag), row["estimated_matched_mag"])
+            self.assertAlmostEqual(math.degrees(math.atan2(imag, real)), row["estimated_matched_deg"])
+            self.assertAlmostEqual(real**2+imag**2, row["estimated_reflected_power_ratio"])
+        payload = export_bundle(demo)
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            xml = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            for field in ("estimated_matched_mag", "estimated_matched_deg", "estimated_matched_real", "estimated_matched_imag"):
+                self.assertIn(field, xml)
+
     def test_xlsx_input_roundtrip(self):
         memory = io.BytesIO()
         write_workbook(memory, [("input", ["Mag0", "Deg0"], [[.4, 60], [.7, -179]])])

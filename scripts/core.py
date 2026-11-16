@@ -52,7 +52,7 @@ def load_config(path=None):
 
 def status(config):
     return {
-        "service": "callmynet-skill", "version": "1.0.1",
+        "service": "callmynet-skill", "version": "1.0.2",
         "models": [{"id": m["id"], "label": m.get("label", LABELS[m["id"]]),
                     "checkpoint_ready": Path(m["checkpoint"]).is_file()} for m in config["models"]],
         "evaluator": config["evaluation_model"],
@@ -306,7 +306,7 @@ def export_bundle(bundle):
     if bundle.get("mode") == "inference" and analysis.get("source") == "demo":
         raise ValueError("合成示例不能验证真实推理")
     sheets = []
-    headers = ("sample_id", "model_id", "mag", "deg", "L1", "L2", "length_unit", "estimated_matched_mag", "estimated_reflected_power_ratio", "estimated_return_loss_db", "evaluator", "outside_training_input_box", "training_support_distance")
+    headers = ("sample_id", "model_id", "mag", "deg", "L1", "L2", "length_unit", "estimated_matched_mag", "estimated_matched_deg", "estimated_matched_real", "estimated_matched_imag", "estimated_reflected_power_ratio", "estimated_return_loss_db", "evaluator", "outside_training_input_box", "training_support_distance")
     sheets.append(("三模型结果", headers, [[r.get(h) for h in headers] for r in predictions]))
     selected = bundle.get("estimated_recommendations", [])
     sheets.append(("预计推荐_待波形验证", headers, [[r.get(h) for h in headers] for r in selected]))
@@ -324,6 +324,7 @@ def export_bundle(bundle):
              "说明": "estimated字段为代理估计；demo为合成示例；稳定性结论仅适用于当前观察窗口和阈值。",
              "模型记录": bundle.get("metadata", [])}
     notes["波形形态参考"] = bundle.get("waveform_reference", {})
+    notes["主要返回量"] = "匹配后复反射系数：estimated_matched_mag为线性幅值|Γ|，无量纲、非百分比；estimated_matched_deg为相位°；real/imag为实部/虚部。反射功率比为辅助量|Γ|²。"
     if analysis and bundle.get("mode") == "inference" and (analysis.get("run_id") != bundle.get("run_id") or analysis.get("source") == "demo"):
         raise ValueError("不能用示例波形或其他推理批次的波形验证真实推荐")
     sheets.append(("说明", ("项目", "内容"), list(notes.items())))

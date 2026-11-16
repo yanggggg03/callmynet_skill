@@ -78,19 +78,23 @@ function renderResults() {
   const winner=verified ? S.analysis.winner : null;
   const prefix=S.bundle.mode==='demo'?'示例 · ':'';
   let title,caption,detail;
+  let coefficient=null;
   if(winner){
     const result=records.find(r=>r.model_id===winner);
+    coefficient=result;
     title=prefix+LABELS[winner];caption='波形比较中满足稳定性判据的最佳方案';
     detail=`L1 ${num(result.L1)} ${result.length_unit} · L2 ${num(result.L2)} ${result.length_unit} · ${S.analysis.source==='measured'?'实测':S.analysis.source==='simulation'?'仿真':'预设示意'}功率波形`;
   } else if(verified) {
     title='三套方案均未满足稳定性判据';caption=prefix+'当前工况的波形比较';detail='请检查波形、调节方案与设备要求，不将最低分方案标记为稳定方案。';
   } else {
     title=prefix+LABELS[provisional.model_id];caption='预计匹配推荐 · 等待功率波形验证';detail=`L1 ${num(provisional.L1)} ${provisional.length_unit} · L2 ${num(provisional.L2)} ${provisional.length_unit} · 共用响应代理评分`;
+    coefficient=provisional;
   }
-  $('recommendation').innerHTML=`<span class="caption">${escapeHTML(caption)}</span><strong>${escapeHTML(title)}</strong><p>${escapeHTML(detail)}</p>`;
+  const coefficientMarkup=coefficient?`<div class="coefficient-output"><span>预计匹配后反射系数（线性幅值）</span><b>|Γ| = ${num(coefficient.estimated_matched_mag,5)}</b><span>相位 ∠Γ = ${num(coefficient.estimated_matched_deg)}° · 无量纲，非百分比</span></div>`:'';
+  $('recommendation').innerHTML=`<span class="caption">${escapeHTML(caption)}</span><strong>${escapeHTML(title)}</strong>${coefficientMarkup}<p>${escapeHTML(detail)}</p>`;
   document.querySelectorAll('.length-unit').forEach(el=>el.textContent=records[0].length_unit==='deg'?'°':records[0].length_unit);
-  $('result-rows').innerHTML=records.map(r=>`<tr class="${r.model_id===(winner || provisional.model_id)?'best':''}"><td>${escapeHTML(LABELS[r.model_id])}${r.outside_training_input_box?'<small>超出训练输入范围</small>':''}</td><td>${num(r.L1)}</td><td>${num(r.L2)}</td><td>${num(r.estimated_matched_mag,4)}</td><td>${num(r.estimated_reflected_power_ratio*100,3)}%</td></tr>`).join('');
-  $('result-note').textContent=S.bundle.mode==='demo'?'示例动作与响应均为预设值；曲线参考论文脉冲形态，不能用来判断三个网络的真实优劣。':'预计匹配幅值与反射比由统一响应代理计算，不是新调节后的实测。三模型全部使用相同评估器。';
+  $('result-rows').innerHTML=records.map(r=>`<tr class="${r.model_id===(winner || provisional.model_id)?'best':''}"><td>${escapeHTML(LABELS[r.model_id])}${r.outside_training_input_box?'<small>超出训练输入范围</small>':''}</td><td>${num(r.L1)}</td><td>${num(r.L2)}</td><td>${num(r.estimated_matched_mag,5)}</td><td>${num(r.estimated_matched_deg)}</td></tr>`).join('');
+  $('result-note').textContent=S.bundle.mode==='demo'?'示例反射系数与动作均为预设值，不能用来判断三个网络的真实优劣。':'返回匹配后反射系数幅值|Γ|及相位，幅值是0～1的线性值，不是反射功率百分比。数值为统一响应代理预测，并非新调节后的实测；低幅值时相位对噪声敏感。';
 }
 function renderAnalysis() {
   const analysis=S.analysis;
@@ -192,12 +196,12 @@ function localWorkbook(sheets){
   return zipped(files);
 }
 function exportLocally(){
-  const b=S.bundle,a=S.analysis || {},headers=['sample_id','model_id','mag','deg','L1','L2','length_unit','estimated_matched_mag','estimated_reflected_power_ratio','evaluator'];
+  const b=S.bundle,a=S.analysis || {},headers=['sample_id','model_id','mag','deg','L1','L2','length_unit','estimated_matched_mag','estimated_matched_deg','estimated_matched_real','estimated_matched_imag','estimated_reflected_power_ratio','evaluator'];
   const metric=['model_id','stable','score','mean_power_w','cv_pct','ripple_pct','error_pct','drift_pct','overshoot_pct','settling_time_s'];
   const wave=['run_id','sample_id','scenario_id','model_id','time_s','power_w','target_w','source','incident_power_w','reflected_power_w','reflected_power_ratio'];
   const sheet=(name,keys,rows)=>({name,headers:keys,rows:rows.map(r=>keys.map(k=>r[k]??''))});
   const confirmed=b.predictions.filter(r=>r.model_id===a.winner&&String(r.sample_id)===String(a.sample_id)&&b.run_id===a.run_id);
-  return localWorkbook([sheet('三模型结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['波形参考',JSON.stringify(b.waveform_reference||{})],['说明',b.notice]]}]);
+  return localWorkbook([sheet('三模型结果',headers,b.predictions),sheet('预计推荐_待波形验证',headers,b.estimated_recommendations),sheet('稳定性评估',metric,a.metrics||[]),sheet('功率波形',wave,a.waveforms||[]),sheet('波形选优结果',headers,confirmed),{name:'说明',headers:['项目','内容'],rows:[['模式',b.mode],['run_id',b.run_id],['输入幅值单位',b.magnitude_unit],['主要返回量','estimated_matched_mag=线性反射系数幅值|Γ|，无量纲非百分比；estimated_matched_deg=相位°；real/imag=实部/虚部；reflected_power_ratio=辅助功率比|Γ|²'],['波形来源',a.source||'未接入'],['优胜模型',a.winner||'无已验证稳定方案'],['阈值',JSON.stringify(a.settings||{})],['波形参考',JSON.stringify(b.waveform_reference||{})],['说明',b.notice]]}]);
 }
 async function getDemo(){
   const response=await fetch('assets/demo.json');if(!response.ok)throw Error('未找到示例文件');return response.json();

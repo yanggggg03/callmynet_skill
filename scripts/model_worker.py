@@ -64,6 +64,8 @@ def main():
                         "L1": float(values[selected, 0]), "L2": float(values[selected, 1]),
                         "length_unit": config["length_unit"],
                         "estimated_matched_mag": amp,
+                        "estimated_matched_real": float(gamma[selected, 0]),
+                        "estimated_matched_imag": float(gamma[selected, 1]),
                         "estimated_matched_deg": float(torch.rad2deg(torch.atan2(gamma[selected, 1], gamma[selected, 0]))),
                         "estimated_reflected_power_ratio": float(powers[selected]),
                         "estimated_return_loss_db": float(-20 * np.log10(max(amp, 1e-8))),

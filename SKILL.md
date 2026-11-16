@@ -31,6 +31,8 @@ The distributed configuration initially points to the three original `D:/Project
 
 ## Deliver results
 
+Lead the matching-effect result with the **reflection coefficient**, including linear magnitude `estimated_matched_mag=|Gamma|` (dimensionless, not a percentage) and phase `estimated_matched_deg` in degrees. Retain complex components `estimated_matched_real/imag` in API and Excel. The reflected-power ratio is auxiliary and equals the magnitude squared. Do not relabel an estimated coefficient as measured merely because a supplied power trace passes the stability test.
+
 Use the panel's Excel download or `POST /api/export` to save all three results, estimated recommendations, waveform metrics, waveform samples, verified selected actions and provenance. Keep the `estimated` and measured/simulation/demo distinctions in the exported results and explanation.
 
 No hardware actuation is implemented. The runtime recommends electrical lengths and evaluates supplied traces. For GitHub distribution and local service setup, read the root README and [references/interface.md](references/interface.md). A repository URL distributes the skill; it does not execute PyTorch by itself.
