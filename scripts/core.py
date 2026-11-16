@@ -52,7 +52,7 @@ def load_config(path=None):
 
 def status(config):
     return {
-        "service": "callmynet-skill", "version": "1.0.2",
+        "service": "callmynet-skill", "version": "1.1.0",
         "models": [{"id": m["id"], "label": m.get("label", LABELS[m["id"]]),
                     "checkpoint_ready": Path(m["checkpoint"]).is_file()} for m in config["models"]],
         "evaluator": config["evaluation_model"],
@@ -67,8 +67,17 @@ def validate_records(records, unit="linear"):
         raise ValueError(f"输入需要 1～{LIMIT_ROWS} 条记录")
     output = []
     for index, row in enumerate(records, 1):
-        mag = finite(row.get("mag", row.get("Mag0")), f"第{index}条 mag")
-        deg = finite(row.get("deg", row.get("Deg0")), f"第{index}条 deg")
+        normalized = {str(key).strip().lower(): value for key, value in row.items()}
+        def field(aliases, label):
+            matches = [normalized[key] for key in aliases if key in normalized]
+            if not matches:
+                raise ValueError(f"缺少{label}列，支持的表头：{' / '.join(aliases)}")
+            values = [finite(value, f"第{index}条 {label}") for value in matches]
+            if any(value != values[0] for value in values[1:]):
+                raise ValueError(f"第{index}条存在多个不一致的{label}列，请只保留一列")
+            return values[0]
+        mag = field(("mag", "mag0"), "幅值")
+        deg = field(("deg", "deg0", "meg0"), "相位")
         if (unit == "linear" and not 0 <= mag <= 1) or (unit == "db" and mag > 0):
             raise ValueError("线性反射幅值须在0～1内，dB幅值须≤0")
         output.append({"sample_id": str(index), "mag": mag, "deg": deg})

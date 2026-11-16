@@ -102,6 +102,17 @@ class StabilityTests(unittest.TestCase):
 
 
 class InterchangeTests(unittest.TestCase):
+    def test_uploaded_lowercase_and_requested_phase_alias(self):
+        for headers in (("mag0", "meg0"), ("mag0", "deg0"), (" Mag0 ", " Deg0 ")):
+            memory = io.BytesIO()
+            write_workbook(memory, [("input", headers, [[.7, -120]])])
+            rows = file_rows({"filename": "input.xlsx", "content_base64": base64.b64encode(memory.getvalue()).decode()})
+            self.assertEqual(validate_records(rows), [{"sample_id": "1", "mag": .7, "deg": -120.0}])
+        with self.assertRaisesRegex(ValueError, "缺少相位列"):
+            validate_records([{"mag0": .7, "wrong": 10}])
+        with self.assertRaisesRegex(ValueError, "不一致"):
+            validate_records([{"mag0": .7, "deg0": 10, "meg0": 20}])
+
     def test_returned_reflection_coefficient_has_magnitude_phase_and_components(self):
         demo = make_demo()
         for row in demo["predictions"]:
