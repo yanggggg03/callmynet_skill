@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from excel_writer import write_workbook
+from training_identity import validate_comparison
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_IDS = ("residual_mlp", "fourier_resmlp", "conditional_flow")
@@ -43,12 +44,15 @@ def load_config(path=None):
     for model in config["models"]:
         checkpoint = Path(model["checkpoint"]).expanduser()
         model["checkpoint"] = str((ROOT / checkpoint).resolve() if not checkpoint.is_absolute() else checkpoint.resolve())
+        if model.get("prepared_data"):
+            prepared = Path(model["prepared_data"]).expanduser()
+            model["prepared_data"] = str((ROOT / prepared).resolve() if not prepared.is_absolute() else prepared.resolve())
     return config
 
 
 def status(config):
     return {
-        "service": "callmynet-skill", "version": "1.0.0",
+        "service": "callmynet-skill", "version": "1.0.1",
         "models": [{"id": m["id"], "label": m.get("label", LABELS[m["id"]]),
                     "checkpoint_ready": Path(m["checkpoint"]).is_file()} for m in config["models"]],
         "evaluator": config["evaluation_model"],
@@ -113,6 +117,8 @@ def worker(config, model, request):
     body = {"model_id": model["id"], "checkpoint": model["checkpoint"],
             "seed": config.get("seed", 42), "threads": config.get("threads", 2),
             "device": config.get("device", "cpu"), "candidates": config.get("flow_candidates", 32), **request}
+    if model.get("prepared_data"):
+        body["prepared_data"] = model["prepared_data"]
     flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
     result = subprocess.run(command, input=json.dumps(body), text=True, encoding="utf-8",
                             capture_output=True, timeout=config.get("timeout_seconds", 180), **flags)
@@ -131,8 +137,7 @@ def run_models(config, request):
     for model in config["models"]:
         generated.append(worker(config, model, {"records": records, "magnitude_unit": unit}))
     metadata = [g["metadata"] for g in generated]
-    if config.get("require_same_training_data", True) and len({m["data_sha256"] for m in metadata}) != 1:
-        raise ValueError("三个权重不是由同一份准备数据和固定划分训练，不能公平比较")
+    comparison_verification = validate_comparison(metadata) if config.get("require_same_training_data", True) else "disabled_by_configuration"
     if len({m["length_unit"] for m in metadata}) != 1 or any(m["bounds"] != metadata[0]["bounds"] for m in metadata):
         raise ValueError("三个模型的电长度单位或长度范围不一致")
     candidate_sets = [{m["id"]: generated[j]["candidates"][i] for j, m in enumerate(config["models"])} for i in range(len(records))]
@@ -148,6 +153,7 @@ def run_models(config, request):
               "magnitude_unit": unit, "records": records, "predictions": results,
               "estimated_recommendations": provisional, "metadata": metadata,
               "evaluation_model": config["evaluation_model"],
+              "training_comparison_verification": comparison_verification,
               "selection_status": "awaiting_waveforms", "waveforms": [],
               "notice": "预计结果由同一个响应代理评分；动态稳定性须由同工况实测或仿真功率波形验证。"}
     # Bind future waveforms to this exact inference run; no stale result reuse.

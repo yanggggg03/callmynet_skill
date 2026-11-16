@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+from training_identity import checkpoint_identity
+
 
 def main():
     request = json.load(sys.stdin)
@@ -29,6 +31,7 @@ def main():
         "bounds": ck["bounds"].tolist(),
         "bounds_source": ck["metadata"]["bounds_source"],
         "training_source": ck["metadata"].get("source", ""),
+        "training_identity": checkpoint_identity(ck, request["checkpoint"], request.get("prepared_data")),
     }
     records = request["records"]
     # The panel always supplies explicit units; all model inputs are converted to complex Gamma.

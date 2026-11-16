@@ -54,6 +54,8 @@ python -B scripts/server.py
 
 ## 验证
 
+**1.0.1修复：** 分别在三个项目准备同样Excel时，NPZ会记录不同源路径，导致整个文件哈希不同。现在核验检查点绑定的原始NPZ内容与固定划分，忽略描述性路径差异。无需重新训练，更新项目并重启服务即可。若迁移了模型，还需保留各自训练时的NPZ，并按接口文档设置 `prepared_data`。
+
 ```bash
 python -B -m unittest discover -s tests -v
 ```
