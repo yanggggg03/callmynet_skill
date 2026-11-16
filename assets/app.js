@@ -107,7 +107,8 @@ function renderChart() {
   const low=begin+(duration-span)*Number($('pan').value)/100, high=low+span;
   const windowed=all.filter(r=>r.time_s>=low && r.time_s<=high && S.visible.has(r.model_id));
   const target=all[0].target_w;
-  let min=Math.min(target,...windowed.map(r=>r.power_w)),max=Math.max(target,...windowed.map(r=>r.power_w));
+  let min=target,max=target;
+  for(const row of windowed){min=Math.min(min,row.power_w);max=Math.max(max,row.power_w);}
   const padding=Math.max((max-min)*.14,target*.005);min-=padding;max+=padding;
   const box={left:60,right:700,top:22,bottom:265};
   const x=t=>box.left+(t-low)/span*(box.right-box.left);
